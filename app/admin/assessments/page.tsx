@@ -28,6 +28,8 @@ export default function AdminAssessmentsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<null | { artifacts: Artifact[]; childName: string }>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [level, setLevel] = useState<"foundational" | "functional" | "transitional" | "advanced">("foundational");
+
 
   useEffect(() => {
     let alive = true;
@@ -55,6 +57,33 @@ export default function AdminAssessmentsPage() {
       artifacts: data.assessment.artifacts ?? [],
     });
   }
+
+  async function assignLevel() {
+    if (!selectedId) return;
+    setMsg(null);
+  
+    const res = await fetch("/api/admin/assessments/assign-level", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ assessmentId: selectedId, level }),
+    });
+  
+    const data: unknown = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const err = (data as { error?: string }).error;
+      setMsg(err ?? "Failed to assign level");
+      return;
+    }
+  
+    setMsg("Level assigned. Student is now active.");
+  
+    // OPTIONAL: refresh list so you can see it disappear if your list endpoint filters
+    const res2 = await fetch("/api/admin/assessments");
+    const data2 = await res2.json();
+    setList(data2.assessments ?? []);
+  }
+  
+
 
   return (
     <main className="p-10">
@@ -101,7 +130,7 @@ export default function AdminAssessmentsPage() {
               <p className="text-sm">
                 <span className="font-medium">Student:</span> {detail.childName}
               </p>
-
+              
               {detail.artifacts.length === 0 && (
                 <p className="text-sm text-gray-600">No artifacts.</p>
               )}
@@ -130,6 +159,32 @@ export default function AdminAssessmentsPage() {
                   )}
                 </div>
               ))}
+
+
+<div className="rounded border p-3">
+  <p className="text-sm font-medium">Assign Level</p>
+  <div className="mt-2 flex flex-wrap items-center gap-2">
+    <select
+      className="rounded border px-2 py-1 text-sm"
+      value={level}
+      onChange={(e) =>
+        setLevel(e.target.value as "foundational" | "functional" | "transitional" | "advanced")
+      }
+    >
+      <option value="foundational">foundational</option>
+      <option value="functional">functional</option>
+      <option value="transitional">transitional</option>
+      <option value="advanced">advanced</option>
+    </select>
+
+    <button className="rounded bg-black px-3 py-1 text-sm text-white" onClick={assignLevel}>
+      Save
+    </button>
+  </div>
+</div>
+
+
+
             </div>
           )}
         </div>

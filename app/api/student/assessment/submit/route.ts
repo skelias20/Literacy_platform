@@ -11,6 +11,7 @@ export async function POST(req: Request) {
   if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const payload = verifyStudentJwt(token);
+  const childId = payload.childId;
 
   const body = await req.json().catch(() => null);
   if (!body) return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
@@ -66,7 +67,12 @@ await tx.assessmentArtifact.deleteMany({
       where: { id: assessment.id },
       data: { submittedAt: new Date() },
     });
-
+    
+    await prisma.child.update({
+      where: { id: childId },
+      data: { status: "pending_level_review" },
+    });
+    
     // IMPORTANT: Do NOT set child to active here. Admin must review & assign level.
     // Keep status as assessment_required until admin assigns a level.
   });
