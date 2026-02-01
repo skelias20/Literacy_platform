@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
+// api/admin/assessments/route.ts
 export async function GET() {
   const assessments = await prisma.assessment.findMany({
     where: {

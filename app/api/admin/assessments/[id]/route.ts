@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-
+// api/admin/assessments/[id]/route.ts
 export async function GET(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
