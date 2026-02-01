@@ -26,7 +26,13 @@ type Artifact = {
 export default function AdminAssessmentsPage() {
   const [list, setList] = useState<Row[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [detail, setDetail] = useState<null | { artifacts: Artifact[]; childName: string }>(null);
+  // Updated state to include level and status info
+const [detail, setDetail] = useState<null | { 
+  artifacts: Artifact[]; 
+  childName: string;
+  assignedLevel?: string | null; // Needed for assignedLabel
+  child?: { status: string; level?: string | null }; // Needed for isAssigned
+}>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [level, setLevel] = useState<"foundational" | "functional" | "transitional" | "advanced">("foundational");
 
@@ -47,17 +53,28 @@ export default function AdminAssessmentsPage() {
     setMsg(null);
     const res = await fetch(`/api/admin/assessments/${id}`);
     const data = await res.json();
+    
     if (!res.ok) {
       setMsg(data.error ?? "Failed to load");
       return;
     }
-    const child = data.assessment.child;
+  
+    const assessment = data.assessment;
+    const child = assessment.child;
+  
     setDetail({
       childName: `${child.childFirstName} ${child.childLastName}`,
-      artifacts: data.assessment.artifacts ?? [],
+      artifacts: assessment.artifacts ?? [],
+      assignedLevel: assessment.assignedLevel, // Save this
+      child: child, // Save this
     });
+  
+    // Automatically set the dropdown to the already assigned level if it exists
+    const assigned = assessment.assignedLevel ?? child.level ?? null;
+    if (assigned) {
+      setLevel(assigned);
+    }
   }
-
   async function assignLevel() {
     if (!selectedId) return;
     setMsg(null);
@@ -83,6 +100,11 @@ export default function AdminAssessmentsPage() {
     setList(data2.assessments ?? []);
   }
   
+  const isAssigned =
+  !!detail?.assignedLevel || detail?.child?.status === "active" || !!detail?.child?.level;
+
+const assignedLabel =
+  detail?.assignedLevel ?? detail?.child?.level ?? null;
 
 
   return (
@@ -164,22 +186,35 @@ export default function AdminAssessmentsPage() {
 <div className="rounded border p-3">
   <p className="text-sm font-medium">Assign Level</p>
   <div className="mt-2 flex flex-wrap items-center gap-2">
-    <select
-      className="rounded border px-2 py-1 text-sm"
-      value={level}
-      onChange={(e) =>
-        setLevel(e.target.value as "foundational" | "functional" | "transitional" | "advanced")
-      }
-    >
+  {isAssigned && assignedLabel && (
+  <p className="text-sm text-green-700">
+    Student has already been assigned to level: <span className="font-medium">{assignedLabel}</span>
+  </p>
+)}
+
+  <select
+  className="rounded border px-2 py-1 text-sm disabled:opacity-60"
+  value={level}
+  disabled={isAssigned}
+  onChange={(e) =>
+    setLevel(e.target.value as "foundational" | "functional" | "transitional" | "advanced")
+  }
+>
+
       <option value="foundational">foundational</option>
       <option value="functional">functional</option>
       <option value="transitional">transitional</option>
       <option value="advanced">advanced</option>
     </select>
 
-    <button className="rounded bg-black px-3 py-1 text-sm text-white" onClick={assignLevel}>
-      Save
-    </button>
+    <button
+  className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-60"
+  onClick={assignLevel}
+  disabled={isAssigned}
+>
+  {isAssigned ? "Already assigned" : "Save"}
+</button>
+
   </div>
 </div>
 

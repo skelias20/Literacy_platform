@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 
 type Skill = "reading" | "listening" | "writing" | "speaking";
@@ -35,6 +36,8 @@ export default function StudentAssessmentPage() {
 
   const readingRecorderRef = useRef<MediaRecorder | null>(null);
   const speakingRecorderRef = useRef<MediaRecorder | null>(null);
+  const router = useRouter();
+
 
 
 
@@ -56,15 +59,14 @@ export default function StudentAssessmentPage() {
       setMsg(null);
 
       const res = await fetch("/api/student/assessment");
-      const data = await res.json().catch(() => ({}));
+const data = await res.json().catch(() => ({}));
 
       if (!alive) return;
 
-      if (!res.ok) {
-        setErr(data.error ?? "Failed to load assessment.");
-        setLoading(false);
-        return;
-      }
+      if (!res.ok && data.blocked) {
+        router.replace("/student");
+        return; 
+           }
 
       setAssessmentId(data.assessmentId);
       setContent(data.content ?? []);

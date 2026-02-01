@@ -46,7 +46,7 @@ export async function POST(req: Request) {
 
     const assessment = await prisma.assessment.findUnique({
       where: { id: assessmentId },
-      select: { id: true, childId: true, submittedAt: true },
+      select: { id: true, childId: true, submittedAt: true,assignedLevel: true  },
     });
 
     if (!assessment) return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
@@ -54,6 +54,10 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Assessment not submitted yet" }, { status: 400 });
     }
 
+    if (assessment.assignedLevel) {
+      return NextResponse.json({ error: "Level already assigned" }, { status: 409 });
+    }
+    
     // atomic update
     await prisma.$transaction(async (tx) => {
       await tx.assessment.update({

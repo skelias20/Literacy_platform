@@ -14,9 +14,12 @@ export async function GET() {
   if (!child) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
   // Only allow assessment if required (or already started)
-  if (child.status !== "assessment_required" && child.status !== "active") {
-    return NextResponse.json({ error: "Assessment not available" }, { status: 403 });
-  }
+  if (child.status !== "assessment_required") {
+    return NextResponse.json(
+      { blocked: true, status: child.status },
+      { status: 409 }
+    );
+  } 
 
   // Ensure initial assessment row exists
   const assessment = await prisma.assessment.upsert({

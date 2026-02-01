@@ -8,10 +8,24 @@ export async function GET() {
       submittedAt: { not: null },
     },
     orderBy: { submittedAt: "desc" },
-    include: {
-      child: { include: { parent: true } },
+    select: {
+      id: true,
+      submittedAt: true,
+      assignedLevel: true,
+      child: {
+        select: {
+          id: true,
+          childFirstName: true,
+          childLastName: true,
+          grade: true,
+          status: true,
+          level: true,
+          parent: { select: { email: true, phone: true } },
+        },
+      },
     },
   });
+  
 
   return NextResponse.json({ assessments });
 }
