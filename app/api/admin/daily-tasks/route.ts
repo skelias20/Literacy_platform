@@ -165,7 +165,23 @@ export async function POST(req: Request) {
             skipDuplicates: true,
           });
         }
+        const eligibleChildren = await tx.child.findMany({
+          where: {
+            status: "active",
+            ...(levelValue ? { level: levelValue } : {}), // if levelValue null => all active children
+          },
+          select: { id: true },
+        });
 
+        if (eligibleChildren.length > 0) {
+          await tx.dailySubmission.createMany({
+            data: eligibleChildren.map((c) => ({
+              childId: c.id,
+              dailyTaskId: task.id,
+            })),
+            skipDuplicates: true, // respects @@unique([childId, dailyTaskId])
+          });
+        }
         results.push({ skill, taskId: task.id });
       }
 

@@ -188,14 +188,15 @@ export default function StudentDailyTaskPage() {
     }
   }
 
-  async function uploadAudio() {
-    if (!audioBlob || !detail) return;
+  async function uploadAudio(): Promise<boolean> {
+
+    if (!audioBlob || !detail) return false;
 
     setErr(null);
     setMsg(null);
 
     const fd = new FormData();
-    fd.append("audio", audioBlob, `${detail.task.skill}.webm`);
+    fd.append("file", audioBlob, `${detail.task.skill}.webm`);
 
     const res = await fetch(`/api/student/daily-tasks/${detail.task.id}/upload-audio`, {
       method: "POST",
@@ -205,11 +206,16 @@ export default function StudentDailyTaskPage() {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       setErr(data.error ?? "Upload failed.");
-      return;
+      return false;
     }
 
     setAudioUploadedFileId(data.fileId);
-    setMsg("Audio uploaded. Now submit the task.");
+setMsg("Audio uploaded. Now submit the task.");
+return true;
+
+setErr(data.error ?? "Upload failed.");
+return false;
+
   }
 
   async function submit() {
@@ -248,6 +254,14 @@ export default function StudentDailyTaskPage() {
       setSubmitting(false);
       return;
     }
+
+    const ok = await uploadAudio();
+if (!ok) {
+  setSubmitting(false);
+  return;
+}
+await load(detail.task.id);
+
 
     window.location.href = "/student";
   }
