@@ -1,4 +1,5 @@
 // app/student/tasks/[taskId]/page.tsx
+// c
 "use client";
 
 import Link from "next/link";
@@ -259,7 +260,7 @@ return false;
 if (!ok) {
   setSubmitting(false);
   return;
-}
+} 
 await load(detail.task.id);
 
 

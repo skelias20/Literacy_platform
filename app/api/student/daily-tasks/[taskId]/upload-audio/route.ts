@@ -6,7 +6,7 @@ import jwt from "jsonwebtoken";
 import { SkillType } from "@prisma/client";
 import fs from "fs/promises";
 import path from "path";
-
+// c
 export const runtime = "nodejs";
 
 type StudentJwtPayload = { childId: string; username: string };
