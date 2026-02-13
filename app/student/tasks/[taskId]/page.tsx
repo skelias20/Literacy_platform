@@ -211,11 +211,9 @@ export default function StudentDailyTaskPage() {
     }
 
     setAudioUploadedFileId(data.fileId);
-setMsg("Audio uploaded. Now submit the task.");
+
 return true;
 
-setErr(data.error ?? "Upload failed.");
-return false;
 
   }
 
@@ -233,6 +231,13 @@ return false;
         setErr("Record audio first.");
         setSubmitting(false);
         return;
+      }
+      if(!audioUploadedFileId && audioBlob){
+        const ok = await uploadAudio();
+        if(!ok){
+          setSubmitting(false);
+          return;
+        }
       }
       await uploadAudio();
       await load(detail.task.id);
@@ -404,6 +409,7 @@ await load(detail.task.id);
       >
         {submitting ? "Submitting..." : isLocked ? "Already submitted" : "Submit task"}
       </button>
+      <button disabled={!canSubmit}>{submitting?"Submitting...":"Submit Task"} </button>
     </main>
   );
 }
