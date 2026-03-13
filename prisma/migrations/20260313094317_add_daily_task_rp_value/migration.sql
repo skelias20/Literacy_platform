@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE "DailyTask" ADD COLUMN     "rpValue" INTEGER NOT NULL DEFAULT 10;

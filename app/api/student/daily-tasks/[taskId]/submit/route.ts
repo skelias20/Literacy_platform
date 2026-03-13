@@ -52,7 +52,7 @@ export async function POST(
 
     const task = await prisma.dailyTask.findUnique({
       where: { id: taskId },
-      select: { id: true, level: true, skill: true },
+      select: { id: true, level: true, skill: true, rpValue: true },
     });
     if (!task) return NextResponse.json({ error: "Not found" }, { status: 404 });
     if (task.level !== null && child.level !== task.level) {
@@ -117,13 +117,23 @@ export async function POST(
       }
     }
 
-    // LOCK immediately
+    // LOCK immediately and award RP
+    const rp = task.rpValue ?? 10;
     await prisma.dailySubmission.update({
       where: { id: submission.id },
       data: {
         isCompleted: true,
         submittedAt: new Date(),
-        rpEarned: 0,
+        rpEarned: rp,
+      },
+    });
+
+    await prisma.rpEvent.create({
+      data: {
+        childId: child.id,
+        dailySubmissionId: submission.id,
+        delta: rp,
+        reason: "daily_completion",
       },
     });
 
@@ -133,7 +143,7 @@ export async function POST(
       data: { lastDailySubmissionAt: new Date() },
     });
 
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ ok: true, rpEarned: rp });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: msg }, { status: 500 });

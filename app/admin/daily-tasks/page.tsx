@@ -21,6 +21,7 @@ type Task = {
   taskDate: string;
   skill: SkillType;
   level: LiteracyLevel | null;
+  rpValue: number;
   contentLinks: { contentItemId: string; contentItem: { id: string; title: string; skill: SkillType } }[];
 };
 
@@ -42,6 +43,7 @@ export default function AdminDailyTasksPage() {
   const [tasks, setTasks] = useState<Task[]>([]);
 
   const [selectedSkills, setSelectedSkills] = useState<SkillType[]>([]);
+  const [rpValue, setRpValue] = useState<number>(10);
   const [contentBySkill, setContentBySkill] = useState<Record<SkillType, string[]>>({
     reading: [],
     listening: [],
@@ -124,6 +126,7 @@ export default function AdminDailyTasksPage() {
         level,
         skills: selectedSkills,
         contentBySkill,
+        rpValue,
       }),
     });
 
@@ -203,6 +206,25 @@ export default function AdminDailyTasksPage() {
               </div>
             </div>
 
+            <div className="text-sm">
+              <span className="block font-medium">
+                Reading Points (RP) per task — <span className="text-black font-bold">{rpValue} RP</span>
+              </span>
+              <input
+                type="range"
+                min={5}
+                max={20}
+                step={1}
+                value={rpValue}
+                onChange={(e) => setRpValue(Number(e.target.value))}
+                className="mt-2 w-full"
+              />
+              <div className="flex justify-between text-xs text-gray-500">
+                <span>5 RP</span>
+                <span>20 RP</span>
+              </div>
+            </div>
+
             <button
               onClick={save}
               disabled={loading}
@@ -225,7 +247,10 @@ export default function AdminDailyTasksPage() {
                 <div key={t.id} className="rounded border p-3 text-sm">
                   <div className="flex items-center justify-between">
                     <span className="font-medium capitalize">{t.skill}</span>
-                    <span className="text-gray-600">{t.level ?? "all levels"}</span>
+                    <div className="flex items-center gap-3 text-gray-600">
+                      <span className="text-xs font-medium text-indigo-600">{t.rpValue} RP</span>
+                      <span>{t.level ?? "all levels"}</span>
+                    </div>
                   </div>
                   <ul className="mt-2 list-disc pl-5 text-gray-700">
                     {t.contentLinks.map((cl) => (

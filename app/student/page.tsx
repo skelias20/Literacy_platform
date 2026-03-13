@@ -55,6 +55,16 @@ export default async function StudentHomePage() {
     submittedAt: Date | null;
   }[] = [];
 
+  // ---- Total RP ----
+  let totalRp = 0;
+  if (child.status === "active") {
+    const rpAgg = await prisma.rpEvent.aggregate({
+      where: { childId: child.id },
+      _sum: { delta: true },
+    });
+    totalRp = rpAgg._sum.delta ?? 0;
+  }
+
   if (child.status === "active") {
     const tasks = await prisma.dailyTask.findMany({
       where: {
@@ -99,6 +109,12 @@ export default async function StudentHomePage() {
         <p className="text-sm text-gray-700">
           Level: {child.level ?? "Not assigned yet"}
         </p>
+        {child.status === "active" && (
+          <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5">
+            <span className="text-sm font-bold text-indigo-700">⭐ {totalRp} RP</span>
+            <span className="text-xs text-indigo-500">Reading Points</span>
+          </div>
+        )}
       </div>
 
       {child.status === "assessment_required" && (

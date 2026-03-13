@@ -86,6 +86,7 @@ export async function GET(req: Request) {
         taskDate: true,
         skill: true,
         level: true,
+        rpValue: true,
         contentLinks: {
           select: {
             contentItemId: true,
@@ -109,11 +110,11 @@ export async function POST(req: Request) {
     if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const body = (await req.json()) as {
-      date: string; // "YYYY-MM-DD"
+      date: string;
       level: "all" | LiteracyLevel;
       skills: SkillType[];
-      // map of skill -> content ids
       contentBySkill: Partial<Record<SkillType, string[]>>;
+      rpValue: number;
     };
 
     const taskDate = parseDateOnly(body.date);
@@ -121,6 +122,8 @@ export async function POST(req: Request) {
 
     const levelValue: LiteracyLevel | null =
       body.level !== "all" ? body.level : null;
+
+    const rpValue = Math.min(20, Math.max(5, Math.round(Number(body.rpValue ?? 10))));
 
     const skills = Array.from(new Set(body.skills ?? []));
     if (skills.length === 0) {
@@ -145,10 +148,19 @@ export async function POST(req: Request) {
               taskDate,
               skill,
               level: levelValue,
+              rpValue,
               createdByAdminId: admin.adminId,
             },
             select: { id: true },
           }));
+
+        // If task already existed, update rpValue in case admin changed it
+        if (existing) {
+          await tx.dailyTask.update({
+            where: { id: existing.id },
+            data: { rpValue },
+          });
+        }
 
         // Replace content links for this task
         const contentIds = (body.contentBySkill?.[skill] ?? []).filter(Boolean);

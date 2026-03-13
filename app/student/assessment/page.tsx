@@ -121,6 +121,7 @@ const data = await res.json().catch(() => ({}));
       }
 
       setMsg("Submitted. Your admin will review and assign your level.");
+      router.push("/student");
     } catch (e: unknown) {
       const err = e as Error;
       setErr(err.message || "Submission failed.");

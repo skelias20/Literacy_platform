@@ -142,6 +142,7 @@ model Child {
   childFirstName String
   childLastName  String
   grade          Int
+  dateOfBirth    DateTime
 
   // Admin-assigned credentials (nullable until created)
   username     String? @unique
@@ -284,6 +285,8 @@ model DailyTask {
   taskDate DateTime // treat as date in your app layer (normalize)
   skill    SkillType
   level    LiteracyLevel? // NULL means "applies to all levels"
+
+  rpValue          Int            @default(10) // admin-configurable 5–20
 
   createdByAdminId String
   createdByAdmin   Admin    @relation(fields: [createdByAdminId], references: [id], onDelete: Restrict)

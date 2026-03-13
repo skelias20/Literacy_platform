@@ -80,6 +80,7 @@ export async function GET(
             id: true,
             isCompleted: true,
             submittedAt: true,
+            rpEarned: true,
             artifacts: {
               orderBy: { createdAt: "asc" },
               select: {
@@ -119,6 +120,7 @@ export async function GET(
         ? {
             isCompleted: submission.isCompleted,
             submittedAt: submission.submittedAt,
+            rpEarned: submission.rpEarned,
             artifacts: submission.artifacts.map((a) => ({
               id: a.id,
               skill: a.skill,

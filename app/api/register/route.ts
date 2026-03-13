@@ -34,6 +34,7 @@ export async function POST(req: Request) {
     const childFirstName = clean(form.get("childFirstName"));
     const childLastName = clean(form.get("childLastName"));
     const grade = Number(form.get("grade"));
+    const dateOfBirthRaw = clean(form.get("dateOfBirth"));
 
     const parentFirstName = clean(form.get("parentFirstName"));
     const parentLastName = clean(form.get("parentLastName"));
@@ -50,6 +51,21 @@ export async function POST(req: Request) {
     }
     if (!Number.isInteger(grade) || grade < 1 || grade > 8) {
       return NextResponse.json({ error: "Grade must be between 1 and 8." }, { status: 400 });
+    }
+    if (!dateOfBirthRaw) {
+      return NextResponse.json({ error: "Date of birth is required." }, { status: 400 });
+    }
+    const dateOfBirth = new Date(dateOfBirthRaw);
+    if (isNaN(dateOfBirth.getTime())) {
+      return NextResponse.json({ error: "Date of birth is invalid." }, { status: 400 });
+    }
+    // Sanity check: not in the future, not unrealistically old
+    const now = new Date();
+    if (dateOfBirth >= now) {
+      return NextResponse.json({ error: "Date of birth must be in the past." }, { status: 400 });
+    }
+    if (now.getFullYear() - dateOfBirth.getFullYear() > 25) {
+      return NextResponse.json({ error: "Date of birth seems too far in the past." }, { status: 400 });
     }
     if (!parentFirstName || !parentLastName || !parentEmail || !parentPhone) {
       return NextResponse.json({ error: "Parent info is required." }, { status: 400 });
@@ -100,6 +116,7 @@ export async function POST(req: Request) {
           childFirstName,
           childLastName,
           grade,
+          dateOfBirth,
           status: "pending_payment",
         },
       });

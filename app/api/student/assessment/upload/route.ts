@@ -66,6 +66,16 @@ export async function POST(req: Request) {
     },
   });
 
+  // Delete any existing file artifact for this skill before creating new one
+  // This prevents duplicates when the student re-records and re-uploads
+  await prisma.assessmentArtifact.deleteMany({
+    where: {
+      assessmentId,
+      skill,
+      fileId: { not: null },
+    },
+  });
+
   // Create AssessmentArtifact pointing to file
   await prisma.assessmentArtifact.create({
     data: {

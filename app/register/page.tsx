@@ -9,6 +9,7 @@ export default function RegisterPage() {
   const [childFirstName, setChildFirstName] = useState("");
   const [childLastName, setChildLastName] = useState("");
   const [grade, setGrade] = useState<number>(1);
+  const [dateOfBirth, setDateOfBirth] = useState("");
 
   const [parentFirstName, setParentFirstName] = useState("");
   const [parentLastName, setParentLastName] = useState("");
@@ -49,6 +50,7 @@ export default function RegisterPage() {
     fd.append("childFirstName", childFirstName);
     fd.append("childLastName", childLastName);
     fd.append("grade", String(grade));
+    fd.append("dateOfBirth", dateOfBirth);
     fd.append("parentFirstName", parentFirstName);
     fd.append("parentLastName", parentLastName);
     fd.append("parentEmail", parentEmail);
@@ -78,6 +80,7 @@ export default function RegisterPage() {
     setChildFirstName("");
     setChildLastName("");
     setGrade(1);
+    setDateOfBirth("");
     setParentFirstName("");
     setParentLastName("");
     setParentEmail("");
@@ -136,6 +139,18 @@ export default function RegisterPage() {
               max={8}
               value={grade}
               onChange={(e) => setGrade(Number(e.target.value))}
+              required
+            />
+          </div>
+
+          <div className="mt-3">
+            <label className="text-sm font-medium">Date of Birth</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              type="date"
+              value={dateOfBirth}
+              onChange={(e) => setDateOfBirth(e.target.value)}
+              max={new Date().toISOString().split("T")[0]}
               required
             />
           </div>

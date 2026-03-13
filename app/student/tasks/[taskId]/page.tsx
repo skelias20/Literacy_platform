@@ -30,6 +30,7 @@ type TaskDetail = {
   existingSubmission: {
     isCompleted: boolean;
     submittedAt: string | null;
+    rpEarned: number;
     artifacts: Array<{
       id: string;
       skill: SkillType;
@@ -220,27 +221,22 @@ return true;
   async function submit() {
     if (!detail) return;
 
-    // lock UI instantly
     setSubmitting(true);
     setErr(null);
     setMsg(null);
 
-    // If audio is required and not uploaded yet, force upload first
+    // For audio tasks: upload first if not yet uploaded
     if ((detail.task.skill === "reading" || detail.task.skill === "speaking") && !audioUploadedFileId) {
       if (!audioBlob) {
         setErr("Record audio first.");
         setSubmitting(false);
         return;
       }
-      if(!audioUploadedFileId && audioBlob){
-        const ok = await uploadAudio();
-        if(!ok){
-          setSubmitting(false);
-          return;
-        }
+      const ok = await uploadAudio();
+      if (!ok) {
+        setSubmitting(false);
+        return;
       }
-      await uploadAudio();
-      await load(detail.task.id);
     }
 
     const res = await fetch(`/api/student/daily-tasks/${detail.task.id}/submit`, {
@@ -261,15 +257,9 @@ return true;
       return;
     }
 
-    const ok = await uploadAudio();
-if (!ok) {
-  setSubmitting(false);
-  return;
-} 
-await load(detail.task.id);
-
-
-    window.location.href = "/student";
+    // Reload task so isCompleted = true and rpEarned is set
+    await load(detail.task.id);
+    setSubmitting(false);
   }
 
   if (!taskId) {
@@ -292,6 +282,11 @@ await load(detail.task.id);
           <p className="mt-1 text-sm text-gray-600">
             {isLocked ? "Completed ✅ (locked)" : "Complete and submit once."}
           </p>
+          {isLocked && detail.existingSubmission && (
+            <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-sm font-semibold text-indigo-700">
+              🎉 You earned {detail.existingSubmission.rpEarned} RP for this task!
+            </div>
+          )}
         </div>
         <Link className="underline" href="/student">Back to dashboard</Link>
       </div>
@@ -409,7 +404,6 @@ await load(detail.task.id);
       >
         {submitting ? "Submitting..." : isLocked ? "Already submitted" : "Submit task"}
       </button>
-      <button disabled={!canSubmit}>{submitting?"Submitting...":"Submit Task"} </button>
     </main>
   );
 }
