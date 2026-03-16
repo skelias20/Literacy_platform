@@ -36,6 +36,9 @@ export default async function AdminHomePage() {
 <Link className="underline" href="/admin/daily-reviews">
   Review Daily Submissions
 </Link>
+<Link className="underline" href="/admin/inactive-students">
+  Inactive Students
+</Link>
 </div>
     </main>
   );

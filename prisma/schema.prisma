@@ -87,6 +87,12 @@ enum AuditAction {
   CONTENT_ASSIGNED
 }
 
+enum UploadStatus {
+  PENDING    // presigned URL issued, upload not yet confirmed
+  COMPLETED  // R2 confirmed file arrived, artifact linked
+  FAILED     // upload failed or timed out
+}
+
 //
 // ---------- ADMINS ----------
 //
@@ -186,13 +192,23 @@ model Child {
 // Assessment default content can be external URLs (assetUrl on ContentItem) to avoid file infra.
 //
 model File {
-  id           String   @id @default(uuid())
-  storageKey   String // local disk path or object storage key
+  id           String       @id @default(uuid())
+  storageKey   String       // local disk path (legacy) or R2 object key
+  r2Key        String?      // explicit R2 object key (used for presigned URL generation)
+  storageUrl   String?      // public R2 URL for serving content
   originalName String
   mimeType     String
   byteSize     BigInt
   sha256       String?
-  createdAt    DateTime @default(now())
+
+  // Upload lifecycle
+  uploadStatus  UploadStatus @default(PENDING)
+  failureReason String?      // populated if uploadStatus = FAILED
+
+  // Soft delete — never hard-delete files that may be referenced
+  deletedAt DateTime?
+
+  createdAt DateTime @default(now())
 
   uploadedByAdminId String?
   uploadedByAdmin   Admin?  @relation(fields: [uploadedByAdminId], references: [id], onDelete: SetNull)
@@ -208,6 +224,8 @@ model File {
 
   @@index([uploadedByChildId])
   @@index([uploadedByAdminId])
+  @@index([uploadStatus])
+  @@index([deletedAt])
 }
 
 //
@@ -268,6 +286,7 @@ model ContentItem {
   createdByAdminId String
   createdByAdmin   Admin    @relation(fields: [createdByAdminId], references: [id], onDelete: Restrict)
   createdAt        DateTime @default(now())
+  deletedAt        DateTime? // soft delete — null means active
 
   auditLogsTargeted AdminAuditLog[] @relation("AuditTargetContent")
 
@@ -275,6 +294,7 @@ model ContentItem {
 
   @@index([skill, level])
   @@index([isAssessmentDefault])
+  @@index([deletedAt])
 }
 
 //
