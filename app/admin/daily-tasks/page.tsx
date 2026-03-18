@@ -76,8 +76,42 @@ export default function AdminDailyTasksPage() {
   }
 
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let isCancelled = false;
+
+    async function runLoad() {
+      setLoading(true);
+      setErr(null);
+      setMsg(null);
+
+      try {
+        const qs = new URLSearchParams({ date, level });
+        const res = await fetch(`/api/admin/daily-tasks?${qs.toString()}`);
+        const data = await res.json().catch(() => ({}));
+
+        if (!isCancelled) {
+          if (!res.ok) {
+            setErr(data.error ?? "Failed to load.");
+          } else {
+            setContent(data.content ?? []);
+            setTasks(data.tasks ?? []);
+          }
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setErr("A network error occurred.");
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void runLoad();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [date, level]);
 
   const contentBySkillView = useMemo(() => {
@@ -113,6 +147,17 @@ export default function AdminDailyTasksPage() {
 
     if (selectedSkills.length === 0) {
       setErr("Pick at least one skill.");
+      return;
+    }
+
+    // Validate each selected skill has at least one content item attached
+    const skillsMissingContent = selectedSkills.filter(
+      (s) => (contentBySkill[s] ?? []).length === 0
+    );
+    if (skillsMissingContent.length > 0) {
+      setErr(
+        `Please attach at least one content item for: ${skillsMissingContent.join(", ")}.`
+      );
       return;
     }
 

@@ -1,9 +1,11 @@
+// app/api/admin/receipts/[fileId]/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
 import jwt from "jsonwebtoken";
 import fs from "fs/promises";
 import path from "path";
+import { generatePresignedGetUrl } from "@/lib/r2";
 
 function mustGetEnv(name: string): string {
   const v = process.env[name];
@@ -49,13 +51,27 @@ export async function GET(
     // ---- load file record ----
     const file = await prisma.file.findUnique({
       where: { id: fileId },
-      select: { storageKey: true, mimeType: true, originalName: true },
+      select: {
+        storageKey: true,
+        r2Key: true,
+        mimeType: true,
+        originalName: true,
+      },
     });
 
     if (!file) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
+    // R2-hosted file: generate a short-lived presigned GET URL (60s).
+    // Bucket stays private — the signed URL grants temporary access.
+    // This is secure: receipts contain financial data tied to minors.
+    if (file.r2Key) {
+      const signedUrl = await generatePresignedGetUrl(file.r2Key, 60);
+      return NextResponse.redirect(signedUrl, { status: 302 });
+    }
+
+    // Legacy: file stored on local filesystem (pre-R2 migration).
     const absPath = path.join(process.cwd(), file.storageKey);
     const bytes = await fs.readFile(absPath);
 

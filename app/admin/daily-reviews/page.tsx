@@ -93,9 +93,44 @@ export default function AdminDailyReviewsPage() {
   }
 
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let isCancelled = false;
+
+    async function runLoad() {
+      setLoading(true);
+      setErr(null);
+      try {
+        const res = await fetch(`/api/admin/daily-reviews?date=${encodeURIComponent(date)}`);
+        const data = (await res.json()) as { error?: string; tasks?: TaskBlock[] };
+
+        if (!isCancelled) {
+          if (!res.ok) {
+            setErr(data.error ?? "Failed to load.");
+            setTasks([]);
+          } else {
+            setTasks(data.tasks ?? []);
+          }
+        }
+      } catch {
+        // Removed unused 'e' to satisfy no-unused-vars
+        if (!isCancelled) {
+          setErr("Failed to load.");
+          setTasks([]);
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void runLoad();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [date]);
+
+  // 'async function load()' has been removed as it is no longer used.
 
   const summary = useMemo(() => {
     let total = 0;

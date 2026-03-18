@@ -1,0 +1,35 @@
+# worker/wrangler.toml
+name = "literacy-platform-worker"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+[[queues.consumers]]
+queue = "r2-upload-events"
+max_batch_size = 10
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "r2-upload-events-dlq"
+
+[triggers]
+crons = ["0 2 * * *"]
+
+[[r2_buckets]]
+binding = "LITERACY_BUCKET"
+bucket_name = "literacy-platform-content"
+
+[vars]
+NEXT_APP_URL = "http://localhost:3000"
+
+# Deploy steps:
+# cd worker && npm install
+# npx wrangler secret put WORKER_SECRET
+# npx wrangler secret put NEXT_APP_URL
+# npx wrangler deploy
+#
+# One-time queue setup:
+# npx wrangler queues create r2-upload-events
+# npx wrangler queues create r2-upload-events-dlq
+#
+# One-time R2 event notification:
+# npx wrangler r2 bucket notification create your-bucket-name \
+#   --event-type object-create --queue r2-upload-events

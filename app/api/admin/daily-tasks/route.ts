@@ -58,12 +58,17 @@ export async function GET(req: Request) {
     const levelFilter: LiteracyLevel | null =
       level && level !== "all" ? (level as LiteracyLevel) : null;
 
-    // Content: filter by level when provided, otherwise show any.
-    // Keep it simple: only show content items that are NOT assessment defaults.
+    // Content filtering logic:
+    // - "all levels" selected → only show content with level = null
+    //   (level-specific content must not be assigned to all students)
+    // - specific level selected → show that level + null (all-levels content)
     const content = await prisma.contentItem.findMany({
       where: {
         isAssessmentDefault: false,
-        ...(levelFilter ? { level: levelFilter } : {}),
+        deletedAt: null,
+        ...(levelFilter
+          ? { OR: [{ level: levelFilter }, { level: null }] }
+          : { level: null }),
       },
       select: {
         id: true,

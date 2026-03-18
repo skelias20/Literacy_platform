@@ -99,9 +99,43 @@ export default function InactiveStudentsPage() {
   }
 
   useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [date]);
+    // 1. Initialize cancellation flag
+    let isCancelled = false;
+
+    async function runLoad() {
+      setLoading(true);
+      setErr(null);
+
+      try {
+        const res = await fetch(`/api/admin/inactive-students?date=${date}`);
+        const data = await res.json().catch(() => ({}));
+
+        // 2. Only update state if the effect is still valid for this render
+        if (!isCancelled) {
+          if (!res.ok) {
+            setErr(data.error ?? "Failed to load.");
+          } else {
+            setStudents(data.students ?? []);
+          }
+        }
+      } catch (e) {
+        if (!isCancelled) {
+          setErr("A network error occurred.");
+        }
+      } finally {
+        if (!isCancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void runLoad();
+
+    // 3. Cleanup function sets flag to true
+    return () => {
+      isCancelled = true;
+    };
+  }, [date]); // Dependencies remain the same
 
   const filtered =
     filter === "all" ? students : students.filter((s) => s.activityStatus === filter);
