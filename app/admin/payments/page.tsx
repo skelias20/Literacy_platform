@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type PaymentRow = {
   id: string;
@@ -37,20 +38,30 @@ export default function AdminPaymentsPage() {
   async function load() {
     setLoading(true);
     setMsg(null);
-    const res = await fetch(`/api/admin/payments?status=${status}`);
+    const res = await adminFetch(`/api/admin/payments?status=${status}`);
     const data = await res.json();
     setPayments(data.payments ?? []);
     setLoading(false);
   }
 
   useEffect(() => {
-    load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
+      setMsg(null);
+      const res = await adminFetch(`/api/admin/payments?status=${status}`);
+      const data = await res.json();
+      if (cancelled) return;
+      setPayments(data.payments ?? []);
+      setLoading(false);
+    };
+    void run();
+    return () => { cancelled = true; };
   }, [status]);
 
   async function approve(id: string) {
     setMsg(null);
-    const res = await fetch(`/api/admin/payments/${id}/approve`, {
+    const res = await adminFetch(`/api/admin/payments/${id}/approve`, {
       method: "POST",
     });
     const data = await res.json();
@@ -66,7 +77,7 @@ export default function AdminPaymentsPage() {
     setMsg(null);
     const reason = (rejectReasons[id] ?? "").trim();
   
-    const res = await fetch(`/api/admin/payments/${id}/reject`, {
+    const res = await adminFetch(`/api/admin/payments/${id}/reject`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ reason }),

@@ -22,6 +22,19 @@ export default function RegisterPage() {
   const [transactionId, setTransactionId] = useState("");
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
 
+  const [subjects, setSubjects] = useState<string[]>([]);
+
+  const SUBJECT_OPTIONS = [
+    "English", "Mathematics", "Science", "Social Studies",
+    "Arts", "Music", "Physical Education", "Technology",
+  ];
+
+  function toggleSubject(subject: string) {
+    setSubjects((prev) =>
+      prev.includes(subject) ? prev.filter((s) => s !== subject) : [...prev, subject]
+    );
+  }
+
   // Tracks the confirmed fileId after presign+upload+confirm
   const [confirmedReceiptFileId, setConfirmedReceiptFileId] = useState<string | null>(null);
   const [receiptUploading, setReceiptUploading] = useState(false);
@@ -159,6 +172,9 @@ export default function RegisterPage() {
       fd.append("receiptFileId", confirmedReceiptFileId!);
     }
 
+    // Subjects — comma-separated, empty string if none selected
+    fd.append("subjects", subjects.join(","));
+
     const res = await fetch("/api/register", { method: "POST", body: fd });
     const data = await res.json().catch(() => ({}));
     setLoading(false);
@@ -181,6 +197,7 @@ export default function RegisterPage() {
     setTransactionId("");
     setReceiptFile(null);
     setConfirmedReceiptFileId(null);
+    setSubjects([]);
   }
 
   return (
@@ -242,6 +259,24 @@ export default function RegisterPage() {
               max={new Date().toISOString().split("T")[0]}
               required
             />
+          </div>
+        </section>
+
+        <section className="rounded border p-4">
+          <h2 className="font-semibold">Favourite Subjects <span className="text-sm font-normal text-gray-500">(optional)</span></h2>
+          <p className="mt-1 text-sm text-gray-600">Select any subjects the student particularly enjoys.</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {SUBJECT_OPTIONS.map((subject) => (
+              <label key={subject} className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={subjects.includes(subject)}
+                  onChange={() => toggleSubject(subject)}
+                  className="rounded border"
+                />
+                <span className="text-sm">{subject}</span>
+              </label>
+            ))}
           </div>
         </section>
 

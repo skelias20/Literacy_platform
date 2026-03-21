@@ -1,44 +1,91 @@
 // app/api/admin/content/route.ts
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { verifyAdminJwt } from "@/lib/auth";
 import { deleteR2Object } from "@/lib/r2";
 import { rateLimit, getClientIp, RATE_LIMITS } from "@/lib/rateLimit";
+import { parseBody } from "@/lib/parseBody";
+import { LiteracyLevelSchema, SkillSchema, IdSchema } from "@/lib/schemas";
 
 export const runtime = "nodejs";
 
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
-const SECRET = mustGetEnv("JWT_SECRET");
+// ── Shared skill/type constraint map ─────────────────────────────────────
+// Mirrors SKILL_CONTENT_TYPES in the frontend content page.
+// "questions" and "passage_text" excluded until task polymorphism is built.
+const SKILL_ALLOWED_TYPES: Record<string, string[]> = {
+  reading:   ["pdf_document"],
+  listening: ["passage_audio"],
+  writing:   ["writing_prompt"],
+  speaking:  ["speaking_prompt", "passage_audio"],
+};
+const FILE_REQUIRED_TYPES = ["pdf_document", "passage_audio"];
 
-async function requireAdmin(req: Request): Promise<string | null> {
+// ── Schemas ───────────────────────────────────────────────────────────────
+
+const ContentPostSchema = z.object({
+  title:       z.string().min(1, "Title required.").max(255).trim(),
+  description: z.string().max(500).trim().nullish(),
+  skill:       SkillSchema,
+  level:       z.union([LiteracyLevelSchema, z.literal("all")]).nullish(),
+  type:        z.string().min(1).max(64),
+  textBody:    z.string().max(10000).trim().nullish(),
+  fileId:      IdSchema.nullish(),
+  mimeType:    z.string().max(128).nullish(),
+});
+
+const ContentPatchSchema = z.object({
+  id:          IdSchema,
+  title:       z.string().min(1).max(255).trim().optional(),
+  description: z.string().max(500).trim().optional(),
+  level:       z.union([LiteracyLevelSchema, z.literal("all")]).optional(),
+});
+
+const ContentDeleteSchema = z.object({
+  id:    IdSchema,
+  force: z.boolean().optional().default(false),
+});
+
+// ── Auth helper ───────────────────────────────────────────────────────────
+
+async function requireAdmin(): Promise<string | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get("admin_token")?.value;
   if (!token) return null;
   try {
-    const p = jwt.verify(token, SECRET) as jwt.JwtPayload;
-    return typeof p.adminId === "string" ? p.adminId : null;
-  } catch { return null; }
+    const payload = verifyAdminJwt(token);
+    return payload.adminId;
+  } catch {
+    return null;
+  }
 }
 
-// ── GET /api/admin/content — list content library ─────────────────────────
+// ── GET ───────────────────────────────────────────────────────────────────
+
 export async function GET(req: Request) {
-  const adminId = await requireAdmin(req);
+  const adminId = await requireAdmin();
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(req.url);
-  const skill = searchParams.get("skill");
-  const level = searchParams.get("level");
+  const skill          = searchParams.get("skill") ?? undefined;
+  const level          = searchParams.get("level") ?? undefined;
   const includeDeleted = searchParams.get("includeDeleted") === "true";
+
+  // Validate skill and level query params if present
+  const skillResult = skill ? SkillSchema.safeParse(skill) : null;
+  if (skillResult && !skillResult.success) {
+    return NextResponse.json({ error: "Invalid skill filter." }, { status: 400 });
+  }
+  const levelResult = level && level !== "all" ? LiteracyLevelSchema.safeParse(level) : null;
+  if (levelResult && !levelResult.success) {
+    return NextResponse.json({ error: "Invalid level filter." }, { status: 400 });
+  }
 
   const rawItems = await prisma.contentItem.findMany({
     where: {
-      ...(skill ? { skill: skill as never } : {}),
-      ...(level && level !== "all" ? { level: level as never } : {}),
+      ...(skillResult?.success ? { skill: skillResult.data } : {}),
+      ...(levelResult?.success ? { level: levelResult.data } : {}),
       ...(includeDeleted ? {} : { deletedAt: null }),
     },
     select: {
@@ -60,7 +107,7 @@ export async function GET(req: Request) {
           storageUrl: true,
           originalName: true,
           mimeType: true,
-          byteSize: true,   // BigInt — must be converted before JSON serialization
+          byteSize: true,
           uploadStatus: true,
         },
       },
@@ -68,8 +115,7 @@ export async function GET(req: Request) {
     orderBy: [{ skill: "asc" }, { createdAt: "desc" }],
   });
 
-  // BigInt cannot be serialized by JSON.stringify — convert byteSize to string.
-  // Using string (not number) to avoid precision loss on very large files.
+  // BigInt serialization — must convert before JSON response
   const items = rawItems.map((item) => ({
     ...item,
     file: item.file
@@ -80,7 +126,8 @@ export async function GET(req: Request) {
   return NextResponse.json({ items });
 }
 
-// ── POST /api/admin/content — create content item after upload ────────────
+// ── POST ──────────────────────────────────────────────────────────────────
+
 export async function POST(req: Request) {
   const ip = getClientIp(req);
   const rl = rateLimit(`admin_content:${ip}`, RATE_LIMITS.adminUpload);
@@ -88,33 +135,42 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Too many requests" }, { status: 429 });
   }
 
-  const adminId = await requireAdmin(req);
+  const adminId = await requireAdmin();
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await req.json();
-    const { title, description, skill, level, type, textBody, fileId, mimeType } = body as {
-      title: string;
-      description?: string;
-      skill: string;
-      level?: string;
-      type: string;
-      textBody?: string;
-      fileId?: string;
-      mimeType?: string;
-    };
+    const parsed = parseBody(
+      ContentPostSchema,
+      await req.json().catch(() => null),
+      "admin/content POST"
+    );
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
-    if (!title?.trim()) return NextResponse.json({ error: "Title required" }, { status: 400 });
-    if (!skill) return NextResponse.json({ error: "Skill required" }, { status: 400 });
-    if (!type) return NextResponse.json({ error: "Type required" }, { status: 400 });
+    // ── Skill/type constraint validation ──────────────────────────────────
+    const allowedTypes = SKILL_ALLOWED_TYPES[body.skill];
+    if (!allowedTypes?.includes(body.type)) {
+      return NextResponse.json(
+        { error: `Content type "${body.type}" is not valid for the "${body.skill}" skill. Allowed: ${allowedTypes?.join(", ")}.` },
+        { status: 400 }
+      );
+    }
+    if (FILE_REQUIRED_TYPES.includes(body.type) && !body.fileId) {
+      return NextResponse.json(
+        { error: `Content type "${body.type}" requires a file upload.` },
+        { status: 400 }
+      );
+    }
 
-    // If a fileId is provided, verify it's COMPLETED
-    if (fileId) {
+    // ── File existence + completion check ─────────────────────────────────
+    if (body.fileId) {
       const file = await prisma.file.findUnique({
-        where: { id: fileId },
-        select: { id: true, uploadStatus: true, storageUrl: true },
+        where: { id: body.fileId },
+        select: { id: true, uploadStatus: true },
       });
-      if (!file) return NextResponse.json({ error: "File not found" }, { status: 404 });
+      if (!file) {
+        return NextResponse.json({ error: "File not found." }, { status: 404 });
+      }
       if (file.uploadStatus !== "COMPLETED") {
         return NextResponse.json(
           { error: "File upload is still processing. Please wait and try again." },
@@ -123,23 +179,20 @@ export async function POST(req: Request) {
       }
     }
 
-    // assetUrl points to the student-facing secure content route.
-    // Admin uses /api/admin/files/[fileId] directly for preview.
-    // Students use /api/student/content/[fileId] which verifies active status.
-    // Both routes generate presigned GET URLs — bucket stays fully private.
-    const assetUrl = fileId ? `/api/student/content/${fileId}` : null;
+    const levelValue = body.level && body.level !== "all" ? body.level : null;
+    const assetUrl   = body.fileId ? `/api/student/content/${body.fileId}` : null;
 
     const item = await prisma.contentItem.create({
       data: {
-        title: title.trim(),
-        description: description?.trim() || null,
-        skill: skill as never,
-        level: level && level !== "all" ? (level as never) : null,
-        type: type as never,
-        textBody: textBody?.trim() || null,
-        fileId: fileId || null,
+        title:           body.title,
+        description:     body.description?.trim() || null,
+        skill:           body.skill as never,
+        level:           levelValue as never,
+        type:            body.type as never,
+        textBody:        body.textBody?.trim() || null,
+        fileId:          body.fileId || null,
         assetUrl,
-        mimeType: mimeType || null,
+        mimeType:        body.mimeType || null,
         createdByAdminId: adminId,
       },
     });
@@ -151,36 +204,35 @@ export async function POST(req: Request) {
   }
 }
 
-// ── PATCH /api/admin/content — rename or update metadata ──────────────────
+// ── PATCH ─────────────────────────────────────────────────────────────────
+
 export async function PATCH(req: Request) {
-  const adminId = await requireAdmin(req);
+  const adminId = await requireAdmin();
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await req.json();
-    const { id, title, description, level } = body as {
-      id: string;
-      title?: string;
-      description?: string;
-      level?: string;
-    };
-
-    if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+    const parsed = parseBody(
+      ContentPatchSchema,
+      await req.json().catch(() => null),
+      "admin/content PATCH"
+    );
+    if (!parsed.ok) return parsed.response;
+    const { id, title, description, level } = parsed.data;
 
     const item = await prisma.contentItem.findUnique({
       where: { id },
       select: { id: true, deletedAt: true },
     });
-    if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!item) return NextResponse.json({ error: "Not found." }, { status: 404 });
     if (item.deletedAt) {
-      return NextResponse.json({ error: "Cannot edit a deleted item" }, { status: 400 });
+      return NextResponse.json({ error: "Cannot edit an archived item." }, { status: 400 });
     }
 
     const updated = await prisma.contentItem.update({
       where: { id },
       data: {
-        ...(title?.trim() ? { title: title.trim() } : {}),
-        ...(description !== undefined ? { description: description.trim() || null } : {}),
+        ...(title              ? { title }                                         : {}),
+        ...(description !== undefined ? { description: description || null }       : {}),
         ...(level !== undefined
           ? { level: level && level !== "all" ? (level as never) : null }
           : {}),
@@ -194,16 +246,20 @@ export async function PATCH(req: Request) {
   }
 }
 
-// ── DELETE /api/admin/content — soft delete with active-link warning ───────
+// ── DELETE ────────────────────────────────────────────────────────────────
+
 export async function DELETE(req: Request) {
-  const adminId = await requireAdmin(req);
+  const adminId = await requireAdmin();
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
-    const body = await req.json();
-    const { id, force } = body as { id: string; force?: boolean };
-
-    if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
+    const parsed = parseBody(
+      ContentDeleteSchema,
+      await req.json().catch(() => null),
+      "admin/content DELETE"
+    );
+    if (!parsed.ok) return parsed.response;
+    const { id, force } = parsed.data;
 
     const item = await prisma.contentItem.findUnique({
       where: { id },
@@ -215,20 +271,17 @@ export async function DELETE(req: Request) {
         file: { select: { r2Key: true } },
         dailyTaskLinks: {
           select: {
-            dailyTask: {
-              select: { id: true, taskDate: true, skill: true },
-            },
+            dailyTask: { select: { id: true, taskDate: true, skill: true } },
           },
         },
       },
     });
 
-    if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!item) return NextResponse.json({ error: "Not found." }, { status: 404 });
     if (item.deletedAt) {
-      return NextResponse.json({ error: "Already deleted" }, { status: 400 });
+      return NextResponse.json({ error: "Already archived." }, { status: 400 });
     }
 
-    // Check for active future task links
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -237,22 +290,21 @@ export async function DELETE(req: Request) {
     );
 
     if (futureTasks.length > 0 && !force) {
-      // Return warning — let admin decide
       return NextResponse.json(
         {
           warning: true,
-          message: `This content is linked to ${futureTasks.length} upcoming task(s). Deleting it will not remove it from those tasks but students will see it as unavailable. Pass force: true to confirm.`,
+          message: `This content is linked to ${futureTasks.length} upcoming task(s). Students will see it as unavailable. Pass force: true to confirm.`,
           affectedTasks: futureTasks.map((l) => ({
-            taskId: l.dailyTask.id,
+            taskId:   l.dailyTask.id,
             taskDate: l.dailyTask.taskDate,
-            skill: l.dailyTask.skill,
+            skill:    l.dailyTask.skill,
           })),
         },
         { status: 200 }
       );
     }
 
-    // Soft delete — never hard delete, file may be referenced in submissions
+    // Soft delete only — never hard delete, file may be in student submissions
     await prisma.contentItem.update({
       where: { id },
       data: { deletedAt: new Date() },

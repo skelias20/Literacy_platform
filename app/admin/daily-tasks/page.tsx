@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type SkillType = "reading" | "listening" | "writing" | "speaking";
 type LiteracyLevel = "foundational" | "functional" | "transitional" | "advanced";
@@ -61,7 +62,7 @@ export default function AdminDailyTasksPage() {
     setMsg(null);
 
     const qs = new URLSearchParams({ date, level });
-    const res = await fetch(`/api/admin/daily-tasks?${qs.toString()}`);
+    const res = await adminFetch(`/api/admin/daily-tasks?${qs.toString()}`);
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
@@ -85,7 +86,7 @@ export default function AdminDailyTasksPage() {
 
       try {
         const qs = new URLSearchParams({ date, level });
-        const res = await fetch(`/api/admin/daily-tasks?${qs.toString()}`);
+        const res = await adminFetch(`/api/admin/daily-tasks?${qs.toString()}`);
         const data = await res.json().catch(() => ({}));
 
         if (!isCancelled) {
@@ -163,7 +164,7 @@ export default function AdminDailyTasksPage() {
 
     setLoading(true);
 
-    const res = await fetch("/api/admin/daily-tasks", {
+    const res = await adminFetch("/api/admin/daily-tasks", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

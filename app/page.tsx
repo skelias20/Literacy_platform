@@ -4,7 +4,7 @@ import Link from "next/link";
 export default function Home() {
   return (
     <main className="min-h-screen p-10 flex gap-3">
-      <h1 className="text-3xl font-bold">Literacy Platform (Demo)</h1>
+      <h1 className="text-3xl font-bold">Literacy Platform</h1>
       <p className="mt-2 text-gray-600">
         App is running. Next: Admin login, registration, approval flow.
       </p>

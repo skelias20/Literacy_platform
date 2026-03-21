@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type SkillType = "reading" | "listening" | "writing" | "speaking";
 
@@ -85,7 +86,7 @@ export default function InactiveStudentsPage() {
     setLoading(true);
     setErr(null);
 
-    const res = await fetch(`/api/admin/inactive-students?date=${date}`);
+    const res = await adminFetch(`/api/admin/inactive-students?date=${date}`);
     const data = await res.json().catch(() => ({}));
 
     if (!res.ok) {
@@ -107,7 +108,7 @@ export default function InactiveStudentsPage() {
       setErr(null);
 
       try {
-        const res = await fetch(`/api/admin/inactive-students?date=${date}`);
+        const res = await adminFetch(`/api/admin/inactive-students?date=${date}`);
         const data = await res.json().catch(() => ({}));
 
         // 2. Only update state if the effect is still valid for this render

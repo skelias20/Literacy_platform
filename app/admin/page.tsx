@@ -39,6 +39,9 @@ export default async function AdminHomePage() {
 <Link className="underline" href="/admin/content">
   Upload Content
 </Link>
+<Link className="underline" href="/admin/students">
+  Students
+</Link>
 <Link className="underline" href="/admin/inactive-students">
   Inactive Students
 </Link>

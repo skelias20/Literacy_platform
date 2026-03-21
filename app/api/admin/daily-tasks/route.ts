@@ -1,67 +1,79 @@
 // app/api/admin/daily-tasks/route.ts
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { verifyAdminJwt } from "@/lib/auth";
+import { parseBody } from "@/lib/parseBody";
+import { LiteracyLevelSchema, SkillSchema, IdSchema } from "@/lib/schemas";
 
 export const runtime = "nodejs";
 
-type AdminJwtPayload = { adminId: string; email: string };
+// ── Schemas ───────────────────────────────────────────────────────────────
 
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is not set`);
-  return v;
-}
+const DateQuerySchema = z.object({
+  date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD format"),
+  level: z.string().optional(),
+});
 
-const SECRET = mustGetEnv("JWT_SECRET");
+const DailyTaskPostSchema = z.object({
+  date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD format"),
+  level: z.union([LiteracyLevelSchema, z.literal("all")]),
+  skills: z
+    .array(SkillSchema)
+    .min(1, "Select at least one skill.")
+    .max(4),
+  contentBySkill: z.record(
+    SkillSchema,
+    z.array(IdSchema).max(20)
+  ).optional(),
+  rpValue: z.number().int().min(5).max(20),
+});
 
-async function requireAdmin(): Promise<AdminJwtPayload | null> {
+// ── Auth helper ───────────────────────────────────────────────────────────
+
+async function requireAdmin(): Promise<string | null> {
   const store = await cookies();
   const token = store.get("admin_token")?.value;
   if (!token) return null;
-
-  const decoded = jwt.verify(token, SECRET);
-  if (typeof decoded !== "object" || decoded === null) return null;
-
-  const p = decoded as jwt.JwtPayload;
-  const adminId = p.adminId;
-  const email = p.email;
-
-  if (typeof adminId !== "string" || typeof email !== "string") return null;
-  return { adminId, email };
+  try {
+    const payload = verifyAdminJwt(token);
+    return payload.adminId;
+  } catch {
+    return null;
+  }
 }
 
-type SkillType = "reading" | "listening" | "writing" | "speaking";
-type LiteracyLevel = "foundational" | "functional" | "transitional" | "advanced";
-
-function parseDateOnly(dateStr: string): Date | null {
-  // Expect "YYYY-MM-DD"
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
-  // store as UTC midnight; consistent compare by using same format in queries
+function parseDateOnly(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00.000Z`);
 }
 
+// ── GET ───────────────────────────────────────────────────────────────────
+
 export async function GET(req: Request) {
   try {
-    const admin = await requireAdmin();
-    if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const adminId = await requireAdmin();
+    if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { searchParams } = new URL(req.url);
-    const date = searchParams.get("date"); // "YYYY-MM-DD"
-    const level = searchParams.get("level"); // "all" | LiteracyLevel
+    const rawParams = {
+      date:  searchParams.get("date") ?? undefined,
+      level: searchParams.get("level") ?? undefined,
+    };
 
-    if (!date) return NextResponse.json({ error: "Missing date" }, { status: 400 });
+    const parsed = parseBody(DateQuerySchema, rawParams, "admin/daily-tasks GET");
+    if (!parsed.ok) return parsed.response;
+    const { date, level } = parsed.data;
+
     const taskDate = parseDateOnly(date);
-    if (!taskDate) return NextResponse.json({ error: "Invalid date format" }, { status: 400 });
 
-    const levelFilter: LiteracyLevel | null =
-      level && level !== "all" ? (level as LiteracyLevel) : null;
+    const levelFilter =
+      level && level !== "all"
+        ? LiteracyLevelSchema.safeParse(level).success
+          ? (level as z.infer<typeof LiteracyLevelSchema>)
+          : null
+        : null;
 
-    // Content filtering logic:
-    // - "all levels" selected → only show content with level = null
-    //   (level-specific content must not be assigned to all students)
-    // - specific level selected → show that level + null (all-levels content)
     const content = await prisma.contentItem.findMany({
       where: {
         isAssessmentDefault: false,
@@ -109,38 +121,63 @@ export async function GET(req: Request) {
   }
 }
 
+// ── POST ──────────────────────────────────────────────────────────────────
+
 export async function POST(req: Request) {
   try {
-    const admin = await requireAdmin();
-    if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const adminId = await requireAdmin();
+    if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const body = (await req.json()) as {
-      date: string;
-      level: "all" | LiteracyLevel;
-      skills: SkillType[];
-      contentBySkill: Partial<Record<SkillType, string[]>>;
-      rpValue: number;
-    };
+    const parsed = parseBody(
+      DailyTaskPostSchema,
+      await req.json().catch(() => null),
+      "admin/daily-tasks POST"
+    );
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
-    const taskDate = parseDateOnly(body.date);
-    if (!taskDate) return NextResponse.json({ error: "Invalid date" }, { status: 400 });
+    const taskDate   = parseDateOnly(body.date);
+    const levelValue = body.level !== "all" ? body.level : null;
+    const skills     = Array.from(new Set(body.skills));
 
-    const levelValue: LiteracyLevel | null =
-      body.level !== "all" ? body.level : null;
+    // ── Skill/content mismatch validation (server-side guard) ─────────────
+    // Mirrors the P0-2 fix — content items must match their assigned skill.
+    const allContentIds = skills
+      .flatMap((s) => body.contentBySkill?.[s] ?? [])
+      .filter(Boolean);
 
-    const rpValue = Math.min(20, Math.max(5, Math.round(Number(body.rpValue ?? 10))));
-
-    const skills = Array.from(new Set(body.skills ?? []));
-    if (skills.length === 0) {
-      return NextResponse.json({ error: "Select at least one skill" }, { status: 400 });
-    }
-
-    // Create each task in a transaction
-    const created = await prisma.$transaction(async (tx) => {
-      const results: { skill: SkillType; taskId: string }[] = [];
+    if (allContentIds.length > 0) {
+      const contentItems = await prisma.contentItem.findMany({
+        where: { id: { in: allContentIds }, deletedAt: null },
+        select: { id: true, skill: true },
+      });
+      const contentSkillMap = new Map(contentItems.map((c) => [c.id, c.skill]));
 
       for (const skill of skills) {
-        // prevent duplicates: one task per (date, skill, levelValue)
+        const ids = body.contentBySkill?.[skill] ?? [];
+        for (const id of ids) {
+          const actualSkill = contentSkillMap.get(id);
+          if (!actualSkill) {
+            return NextResponse.json(
+              { error: `Content item ${id} not found or archived.` },
+              { status: 400 }
+            );
+          }
+          if (actualSkill !== skill) {
+            return NextResponse.json(
+              { error: `Content item "${id}" has skill "${actualSkill}" but was assigned to a "${skill}" task.` },
+              { status: 400 }
+            );
+          }
+        }
+      }
+    }
+
+    // ── Create / update tasks in transaction ──────────────────────────────
+    const created = await prisma.$transaction(async (tx) => {
+      const results: { skill: string; taskId: string }[] = [];
+
+      for (const skill of skills) {
         const existing = await tx.dailyTask.findFirst({
           where: { taskDate, skill, level: levelValue },
           select: { id: true },
@@ -153,39 +190,33 @@ export async function POST(req: Request) {
               taskDate,
               skill,
               level: levelValue,
-              rpValue,
-              createdByAdminId: admin.adminId,
+              rpValue: body.rpValue,
+              createdByAdminId: adminId,
             },
             select: { id: true },
           }));
 
-        // If task already existed, update rpValue in case admin changed it
         if (existing) {
           await tx.dailyTask.update({
             where: { id: existing.id },
-            data: { rpValue },
+            data: { rpValue: body.rpValue },
           });
         }
 
-        // Replace content links for this task
         const contentIds = (body.contentBySkill?.[skill] ?? []).filter(Boolean);
-
-        // wipe old links then create new
         await tx.dailyTaskContent.deleteMany({ where: { dailyTaskId: task.id } });
 
         if (contentIds.length > 0) {
           await tx.dailyTaskContent.createMany({
-            data: contentIds.map((contentItemId) => ({
-              dailyTaskId: task.id,
-              contentItemId,
-            })),
+            data: contentIds.map((contentItemId) => ({ dailyTaskId: task.id, contentItemId })),
             skipDuplicates: true,
           });
         }
+
         const eligibleChildren = await tx.child.findMany({
           where: {
             status: "active",
-            ...(levelValue ? { level: levelValue } : {}), // if levelValue null => all active children
+            ...(levelValue ? { level: levelValue } : {}),
           },
           select: { id: true },
         });
@@ -196,9 +227,10 @@ export async function POST(req: Request) {
               childId: c.id,
               dailyTaskId: task.id,
             })),
-            skipDuplicates: true, // respects @@unique([childId, dailyTaskId])
+            skipDuplicates: true,
           });
         }
+
         results.push({ skill, taskId: task.id });
       }
 

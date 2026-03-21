@@ -1,6 +1,7 @@
 "use client";
 // admin//assessments/page.tsx
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type Row = {
   id: string;
@@ -38,20 +39,21 @@ const [detail, setDetail] = useState<null | {
 
 
   useEffect(() => {
-    let alive = true;
-    (async () => {
-      const res = await fetch("/api/admin/assessments");
+    let cancelled = false;
+    const run = async () => {
+      const res = await adminFetch("/api/admin/assessments");
       const data = await res.json();
-      if (!alive) return;
+      if (cancelled) return;
       setList(data.assessments ?? []);
-    })();
-    return () => { alive = false; };
+    };
+    void run();
+    return () => { cancelled = true; };
   }, []);
 
   async function loadDetail(id: string) {
     setSelectedId(id);
     setMsg(null);
-    const res = await fetch(`/api/admin/assessments/${id}`);
+    const res = await adminFetch(`/api/admin/assessments/${id}`);
     const data = await res.json();
     
     if (!res.ok) {
@@ -79,7 +81,7 @@ const [detail, setDetail] = useState<null | {
     if (!selectedId) return;
     setMsg(null);
   
-    const res = await fetch("/api/admin/assessments/assign-level", {
+    const res = await adminFetch("/api/admin/assessments/assign-level", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ assessmentId: selectedId, level }),
@@ -95,7 +97,7 @@ const [detail, setDetail] = useState<null | {
     setMsg("Level assigned. Student is now active.");
   
     // OPTIONAL: refresh list so you can see it disappear if your list endpoint filters
-    const res2 = await fetch("/api/admin/assessments");
+    const res2 = await adminFetch("/api/admin/assessments");
     const data2 = await res2.json();
     setList(data2.assessments ?? []);
   }

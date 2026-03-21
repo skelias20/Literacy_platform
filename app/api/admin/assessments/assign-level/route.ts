@@ -1,64 +1,58 @@
+// app/api/admin/assessments/assign-level/route.ts
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
-// api/admin/assessments/assign-level/route.ts
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is not set`);
-  return v;
-}
+import { verifyAdminJwt } from "@/lib/auth";
+import { parseBody } from "@/lib/parseBody";
+import { LiteracyLevelSchema, IdSchema } from "@/lib/schemas";
 
-const SECRET = mustGetEnv("JWT_SECRET");
-
-type ReqBody = {
-  assessmentId: string;
-  level: "foundational" | "functional" | "transitional" | "advanced";
-};
+const AssignLevelSchema = z.object({
+  assessmentId: IdSchema,
+  level: LiteracyLevelSchema,
+});
 
 export async function POST(req: Request) {
   try {
-    // --- admin auth ---
+    // ── Auth — use canonical verifier, not inline jwt.verify ─────────────
     const cookieStore = await cookies();
     const token = cookieStore.get("admin_token")?.value;
     if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const decoded = jwt.verify(token, SECRET);
-    if (typeof decoded !== "object" || decoded === null) {
+    let adminId: string;
+    try {
+      const payload = verifyAdminJwt(token);
+      adminId = payload.adminId;
+    } catch {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    const payload = decoded as jwt.JwtPayload;
-    const adminId = payload.adminId;
-    if (typeof adminId !== "string") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
 
-    const body = (await req.json()) as Partial<ReqBody>;
-    const assessmentId = (body.assessmentId ?? "").trim();
-    const level = body.level;
+    // ── Parse + validate input ────────────────────────────────────────────
+    const parsed = parseBody(
+      AssignLevelSchema,
+      await req.json().catch(() => null),
+      "assessments/assign-level"
+    );
+    if (!parsed.ok) return parsed.response;
+    const { assessmentId, level } = parsed.data;
 
-    if (!assessmentId) {
-      return NextResponse.json({ error: "assessmentId is required" }, { status: 400 });
-    }
-    if (!level || !["foundational", "functional", "transitional", "advanced"].includes(level)) {
-      return NextResponse.json({ error: "Invalid level" }, { status: 400 });
-    }
-
+    // ── Business logic checks ─────────────────────────────────────────────
     const assessment = await prisma.assessment.findUnique({
       where: { id: assessmentId },
-      select: { id: true, childId: true, submittedAt: true,assignedLevel: true  },
+      select: { id: true, childId: true, submittedAt: true, assignedLevel: true },
     });
 
-    if (!assessment) return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
+    if (!assessment) {
+      return NextResponse.json({ error: "Assessment not found" }, { status: 404 });
+    }
     if (!assessment.submittedAt) {
       return NextResponse.json({ error: "Assessment not submitted yet" }, { status: 400 });
     }
-
     if (assessment.assignedLevel) {
       return NextResponse.json({ error: "Level already assigned" }, { status: 409 });
     }
-    
-    // atomic update
+
+    // ── Atomic update ─────────────────────────────────────────────────────
     await prisma.$transaction(async (tx) => {
       await tx.assessment.update({
         where: { id: assessmentId },
@@ -92,9 +86,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (e: unknown) {
-    if (e instanceof Error && e.name === "JsonWebTokenError") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
     const msg = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: msg }, { status: 500 });
   }

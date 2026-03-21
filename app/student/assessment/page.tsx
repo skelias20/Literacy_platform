@@ -1,8 +1,10 @@
+// app/student/assessment/page.tsx
 "use client";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { studentFetch } from "@/lib/fetchWithAuth";
 
 type Skill = "reading" | "listening" | "writing" | "speaking";
 
@@ -18,6 +20,13 @@ type ContentItem = {
 };
 
 const MAX_AUDIO_BYTES = 10 * 1024 * 1024; // 10MB
+const MAX_RECORDING_SECONDS = 600; // 10 minutes
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+  const s = (seconds % 60).toString().padStart(2, "0");
+  return `${m}:${s}`;
+}
 
 export default function StudentAssessmentPage() {
   const [assessmentId, setAssessmentId] = useState<string>("");
@@ -37,36 +46,68 @@ export default function StudentAssessmentPage() {
   const [speakingRecording, setSpeakingRecording] = useState(false);
   const [speakingFileId, setSpeakingFileId] = useState<string | null>(null);
 
-  const readingRecorderRef = useRef<MediaRecorder | null>(null);
+  const readingRecorderRef  = useRef<MediaRecorder | null>(null);
   const speakingRecorderRef = useRef<MediaRecorder | null>(null);
+
+  // Independent elapsed timers for each recording skill
+  const readingTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  const speakingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [readingElapsed,  setReadingElapsed]  = useState(0);
+  const [speakingElapsed, setSpeakingElapsed] = useState(0);
+
   const router = useRouter();
 
   const [responses, setResponses] = useState<Record<Skill, string>>({
-    reading: "",
+    reading:   "",
     listening: "",
-    writing: "",
-    speaking: "",
+    writing:   "",
+    speaking:  "",
   });
 
+  // ── Load assessment on mount ──────────────────────────────────────────────
   useEffect(() => {
-    let alive = true;
-    (async () => {
+    let cancelled = false;
+    const run = async () => {
       setLoading(true);
-      const res = await fetch("/api/student/assessment");
+      const res  = await studentFetch("/api/student/assessment");
       const data = await res.json().catch(() => ({}));
-      if (!alive) return;
+      if (cancelled) return;
       if (!res.ok && data.blocked) { router.replace("/student"); return; }
       setAssessmentId(data.assessmentId);
       setContent(data.content ?? []);
       setLoading(false);
-    })();
-    return () => { alive = false; };
+    };
+    void run();
+    return () => { cancelled = true; };
+    // router is stable — intentionally omitted from deps to avoid double-fire
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // ── Timer helpers ─────────────────────────────────────────────────────────
+  function clearTimer(skill: "reading" | "speaking") {
+    const ref = skill === "reading" ? readingTimerRef : speakingTimerRef;
+    if (ref.current) { clearInterval(ref.current); ref.current = null; }
+    if (skill === "reading") setReadingElapsed(0);
+    else setSpeakingElapsed(0);
+  }
+
+  function startTimer(skill: "reading" | "speaking", recorder: MediaRecorder) {
+    clearTimer(skill);
+    const setElapsed = skill === "reading" ? setReadingElapsed : setSpeakingElapsed;
+    const ref = skill === "reading" ? readingTimerRef : speakingTimerRef;
+    let secs = 0;
+    ref.current = setInterval(() => {
+      secs += 1;
+      setElapsed(secs);
+      if (secs >= MAX_RECORDING_SECONDS) {
+        if (recorder.state !== "inactive") recorder.stop();
+      }
+    }, 1000);
+  }
+
   const canSubmit =
     !submitting &&
-    (!!readingFileId || !!readingAudioBlob) &&
+    (!!readingFileId  || !!readingAudioBlob) &&
     (!!speakingFileId || !!speakingAudioBlob) &&
     responses.listening.trim().length > 0 &&
     responses.writing.trim().length > 0;
@@ -83,8 +124,8 @@ export default function StudentAssessmentPage() {
       return null;
     }
 
-    // Step 1: Presign
-    const presignRes = await fetch("/api/upload/presign", {
+    // Step 1: Presign — studentFetch handles 401 → redirect
+    const presignRes  = await studentFetch("/api/upload/presign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -106,10 +147,10 @@ export default function StudentAssessmentPage() {
       fileId: string;
     };
 
-    // Step 2: PUT directly to R2
+    // Step 2: PUT directly to R2 — raw fetch intentional, this is a Cloudflare URL
     const r2Res = await fetch(presignedUrl, {
       method: "PUT",
-      headers: { "Content-Type": mimeType, "Content-Length": String(blob.size) },
+      headers: { "Content-Type": mimeType },
       body: blob,
     });
     if (!r2Res.ok) {
@@ -117,8 +158,8 @@ export default function StudentAssessmentPage() {
       return null;
     }
 
-    // Step 3: Confirm
-    const confirmRes = await fetch("/api/upload/confirm", {
+    // Step 3: Confirm — studentFetch handles 401 → redirect
+    const confirmRes  = await studentFetch("/api/upload/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -137,6 +178,7 @@ export default function StudentAssessmentPage() {
     return fileId;
   }
 
+  // ── Submit ────────────────────────────────────────────────────────────────
   async function submit() {
     if (!canSubmit) {
       setErr("Please complete all parts of the assessment before submitting.");
@@ -147,7 +189,6 @@ export default function StudentAssessmentPage() {
     setMsg(null);
 
     try {
-      // Upload reading if not already uploaded
       let rFileId = readingFileId;
       if (!rFileId && readingAudioBlob) {
         rFileId = await uploadAudio("reading", readingAudioBlob);
@@ -155,7 +196,6 @@ export default function StudentAssessmentPage() {
         setReadingFileId(rFileId);
       }
 
-      // Upload speaking if not already uploaded
       let sFileId = speakingFileId;
       if (!sFileId && speakingAudioBlob) {
         sFileId = await uploadAudio("speaking", speakingAudioBlob);
@@ -163,15 +203,15 @@ export default function StudentAssessmentPage() {
         setSpeakingFileId(sFileId);
       }
 
-      // Submit text responses
-      const res = await fetch("/api/student/assessment/submit", {
+      // Submit text responses — studentFetch handles 401 → redirect
+      const res  = await studentFetch("/api/student/assessment/submit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           assessmentId,
           responses: {
             listening: responses.listening,
-            writing: responses.writing,
+            writing:   responses.writing,
           },
         }),
       });
@@ -190,20 +230,20 @@ export default function StudentAssessmentPage() {
     }
   }
 
-  // ── Recording helpers ────────────────────────────────────────────────────
-  async function startRecording(
-    skill: "reading" | "speaking"
-  ): Promise<void> {
+  // ── Recording helpers ─────────────────────────────────────────────────────
+  async function startRecording(skill: "reading" | "speaking"): Promise<void> {
     setErr(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream   = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
       const chunks: BlobPart[] = [];
+
       recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
       recorder.onstop = () => {
+        clearTimer(skill); // always clear timer in onstop — covers auto-stop at limit
         stream.getTracks().forEach((t) => t.stop());
         const blob = new Blob(chunks, { type: "audio/webm" });
-        const url = URL.createObjectURL(blob);
+        const url  = URL.createObjectURL(blob);
         if (skill === "reading") {
           setReadingAudioBlob(blob);
           setReadingAudioUrl(url);
@@ -216,6 +256,7 @@ export default function StudentAssessmentPage() {
           setSpeakingFileId(null);
         }
       };
+
       if (skill === "reading") {
         readingRecorderRef.current = recorder;
         setReadingRecording(true);
@@ -223,7 +264,9 @@ export default function StudentAssessmentPage() {
         speakingRecorderRef.current = recorder;
         setSpeakingRecording(true);
       }
+
       recorder.start();
+      startTimer(skill, recorder);
     } catch (e: unknown) {
       const domErr = e as DOMException;
       setErr(`Mic error: ${domErr.name} — ${domErr.message}`);
@@ -235,20 +278,24 @@ export default function StudentAssessmentPage() {
       ? readingRecorderRef.current
       : speakingRecorderRef.current;
     if (rec && rec.state !== "inactive") rec.stop();
+    // Timer and recording state cleared in onstop handler
   }
 
   function deleteRecording(skill: "reading" | "speaking") {
     stopRecording(skill);
+    clearTimer(skill);
     if (skill === "reading") {
       setReadingAudioBlob(null);
       if (readingAudioUrl) URL.revokeObjectURL(readingAudioUrl);
       setReadingAudioUrl(null);
       setReadingFileId(null);
+      setReadingRecording(false);
     } else {
       setSpeakingAudioBlob(null);
       if (speakingAudioUrl) URL.revokeObjectURL(speakingAudioUrl);
       setSpeakingAudioUrl(null);
       setSpeakingFileId(null);
+      setSpeakingRecording(false);
     }
   }
 
@@ -297,15 +344,18 @@ export default function StudentAssessmentPage() {
               <label className="text-sm font-medium">Your response</label>
 
               {(s === "reading" || s === "speaking") && (() => {
-                const isReading = s === "reading";
-                const recording = isReading ? readingRecording : speakingRecording;
-                const audioUrl = isReading ? readingAudioUrl : speakingAudioUrl;
-                const audioBlob = isReading ? readingAudioBlob : speakingAudioBlob;
-                const fileId = isReading ? readingFileId : speakingFileId;
+                const isReading  = s === "reading";
+                const recording  = isReading ? readingRecording  : speakingRecording;
+                const audioUrl   = isReading ? readingAudioUrl   : speakingAudioUrl;
+                const audioBlob  = isReading ? readingAudioBlob  : speakingAudioBlob;
+                const fileId     = isReading ? readingFileId     : speakingFileId;
+                const elapsed    = isReading ? readingElapsed    : speakingElapsed;
+                const remaining  = MAX_RECORDING_SECONDS - elapsed;
+                const nearLimit  = remaining <= 60;
 
                 return (
                   <div className="mt-3 flex flex-col gap-2">
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       {!recording ? (
                         <button
                           type="button"
@@ -334,7 +384,28 @@ export default function StudentAssessmentPage() {
                           Delete
                         </button>
                       )}
+
+                      {/* Timer — only shown while recording */}
+                      {recording && (
+                        <span
+                          className={`font-mono text-sm ${
+                            nearLimit ? "font-bold text-red-600" : "text-gray-600"
+                          }`}
+                        >
+                          {nearLimit
+                            ? `⚠ ${formatDuration(remaining)} remaining`
+                            : `🔴 ${formatDuration(elapsed)}`}
+                        </span>
+                      )}
                     </div>
+
+                    {/* Auto-stop warning — only in last 60s */}
+                    {recording && nearLimit && (
+                      <p className="text-xs text-red-600">
+                        Recording will stop automatically at 10 minutes.
+                      </p>
+                    )}
+
                     {audioUrl && <audio controls src={audioUrl} />}
                     {fileId && (
                       <p className="text-xs text-green-700">✅ Uploaded to storage</p>

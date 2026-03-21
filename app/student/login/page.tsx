@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function StudentLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get("expired") === "1";
+
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -36,6 +39,12 @@ export default function StudentLoginPage() {
     <main className="min-h-screen flex items-center justify-center p-6">
       <div className="w-full max-w-sm rounded border p-6">
         <h1 className="text-2xl font-bold">Student Login</h1>
+
+        {sessionExpired && (
+          <div className="mt-3 rounded border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
+            Your session has expired. Please sign in again.
+          </div>
+        )}
 
         <form className="mt-4 space-y-3" onSubmit={onSubmit}>
           <div>

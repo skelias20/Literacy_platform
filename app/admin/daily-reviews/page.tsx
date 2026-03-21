@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type SkillType = "reading" | "listening" | "writing" | "speaking";
 type LiteracyLevel = "foundational" | "functional" | "transitional" | "advanced" | null;
@@ -72,7 +73,7 @@ export default function AdminDailyReviewsPage() {
     setLoading(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/admin/daily-reviews?date=${encodeURIComponent(date)}`);
+      const res = await adminFetch(`/api/admin/daily-reviews?date=${encodeURIComponent(date)}`);
       const data = (await res.json()) as { error?: string; tasks?: TaskBlock[] };
 
       if (!res.ok) {
@@ -99,7 +100,7 @@ export default function AdminDailyReviewsPage() {
       setLoading(true);
       setErr(null);
       try {
-        const res = await fetch(`/api/admin/daily-reviews?date=${encodeURIComponent(date)}`);
+        const res = await adminFetch(`/api/admin/daily-reviews?date=${encodeURIComponent(date)}`);
         const data = (await res.json()) as { error?: string; tasks?: TaskBlock[] };
 
         if (!isCancelled) {

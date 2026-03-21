@@ -15,11 +15,28 @@ type RateLimitConfig = {
 };
 
 export const RATE_LIMITS = {
-  registration: { windowMs: 10 * 60 * 1000, maxRequests: 5 },
-  presign: { windowMs: 5 * 60 * 1000, maxRequests: 20 },
-  studentUpload: { windowMs: 5 * 60 * 1000, maxRequests: 10 },
-  adminUpload: { windowMs: 5 * 60 * 1000, maxRequests: 30 },
+  registration:  { windowMs: 10 * 60 * 1000, maxRequests: 5  },
+  presign:       { windowMs:  5 * 60 * 1000, maxRequests: 20 },
+  studentUpload: { windowMs:  5 * 60 * 1000, maxRequests: 10 },
+  adminUpload:   { windowMs:  5 * 60 * 1000, maxRequests: 30 },
+  // Login limits — applied per IP before any DB or bcrypt work.
+  // Student: generous enough for a child mistyping their password.
+  // Admin: tighter — fewer expected attempts, higher value target.
+  studentLogin:  { windowMs: 15 * 60 * 1000, maxRequests: 10 },
+  adminLogin:    { windowMs: 15 * 60 * 1000, maxRequests: 5  },
 } satisfies Record<string, RateLimitConfig>;
+
+/**
+ * Format a retryAfterMs value into a human-readable string.
+ * Used in login route 429 responses so users see a clear wait time.
+ * Examples: "less than a minute", "2 minutes", "14 minutes"
+ */
+export function formatRetryAfter(retryAfterMs: number): string {
+  const seconds = Math.ceil(retryAfterMs / 1000);
+  if (seconds < 60) return "less than a minute";
+  const minutes = Math.ceil(seconds / 60);
+  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+}
 
 /**
  * Check and record a request for a given key.

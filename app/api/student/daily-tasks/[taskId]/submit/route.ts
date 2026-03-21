@@ -1,37 +1,22 @@
 // app/api/student/daily-tasks/[taskId]/submit/route.ts
-//c
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { verifyStudentJwt } from "@/lib/auth";
+import { parseBody } from "@/lib/parseBody";
 import { SkillType } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-type StudentJwtPayload = { childId: string; username: string };
+// Max text length for listening/writing responses
+const MAX_TEXT_LENGTH = 5000;
 
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is not set`);
-  return v;
-}
-const SECRET = mustGetEnv("JWT_SECRET");
-
-async function requireStudent(): Promise<StudentJwtPayload | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return null;
-
-  const decoded = jwt.verify(token, SECRET);
-  if (typeof decoded !== "object" || decoded === null) return null;
-
-  const payload = decoded as jwt.JwtPayload;
-  const childId = payload.childId;
-  const username = payload.username;
-
-  if (typeof childId !== "string" || typeof username !== "string") return null;
-  return { childId, username };
-}
+const DailySubmitSchema = z.object({
+  // textResponse is only required for listening/writing tasks.
+  // For reading/speaking tasks the client sends null — Zod accepts that.
+  textResponse: z.string().max(MAX_TEXT_LENGTH).trim().nullable().optional(),
+});
 
 export async function POST(
   req: Request,
@@ -40,15 +25,37 @@ export async function POST(
   try {
     const { taskId } = await ctx.params;
 
-    const student = await requireStudent();
-    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    // ── Auth — use canonical verifier, not inline jwt.verify ─────────────
+    const cookieStore = await cookies();
+    const token = cookieStore.get("student_token")?.value;
+    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+    let childId: string;
+    try {
+      const payload = verifyStudentJwt(token);
+      childId = payload.childId;
+    } catch {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // ── Parse + validate input ────────────────────────────────────────────
+    const parsed = parseBody(
+      DailySubmitSchema,
+      await req.json().catch(() => null),
+      "daily-tasks/submit"
+    );
+    if (!parsed.ok) return parsed.response;
+    const { textResponse } = parsed.data;
+
+    // ── Load child + task ─────────────────────────────────────────────────
     const child = await prisma.child.findUnique({
-      where: { id: student.childId },
+      where: { id: childId },
       select: { id: true, level: true, status: true },
     });
     if (!child) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (child.status !== "active") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    if (child.status !== "active") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
 
     const task = await prisma.dailyTask.findUnique({
       where: { id: taskId },
@@ -59,10 +66,7 @@ export async function POST(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const body = (await req.json().catch(() => null)) as
-      | { textResponse?: string | null }
-      | null;
-
+    // ── Upsert submission record ──────────────────────────────────────────
     const submission = await prisma.dailySubmission.upsert({
       where: { childId_dailyTaskId: { childId: child.id, dailyTaskId: task.id } },
       update: {},
@@ -78,54 +82,47 @@ export async function POST(
       return NextResponse.json({ error: "Already submitted" }, { status: 409 });
     }
 
-    // Attach text artifact for listening/writing at submit time
-    if (task.skill === "listening" || task.skill === "writing") {
-      const text = (body?.textResponse ?? "").trim();
-      if (!text) return NextResponse.json({ error: "Text is required" }, { status: 400 });
+    const skill = task.skill as SkillType;
 
+    // ── Attach text artifact for listening/writing ────────────────────────
+    if (skill === "listening" || skill === "writing") {
+      const text = (textResponse ?? "").trim();
+      if (!text) {
+        return NextResponse.json({ error: "Text response is required." }, { status: 400 });
+      }
       await prisma.dailySubmissionArtifact.deleteMany({
-        where: { dailySubmissionId: submission.id, skill: task.skill as SkillType },
+        where: { dailySubmissionId: submission.id, skill },
       });
-
       await prisma.dailySubmissionArtifact.create({
-        data: {
-          dailySubmissionId: submission.id,
-          skill: task.skill as SkillType,
-          textBody: text,
-        },
+        data: { dailySubmissionId: submission.id, skill, textBody: text },
       });
     }
 
-    // Validate “done means …”
+    // ── Verify required artifact is present ──────────────────────────────
     const artifactsNow = await prisma.dailySubmissionArtifact.findMany({
       where: { dailySubmissionId: submission.id },
       select: { skill: true, textBody: true, fileId: true },
     });
 
-    const skill = task.skill as SkillType;
-
     const hasAudio = artifactsNow.some((a) => a.skill === skill && !!a.fileId);
-    const hasText = artifactsNow.some((a) => a.skill === skill && !!(a.textBody ?? "").trim());
+    const hasText  = artifactsNow.some((a) => a.skill === skill && !!(a.textBody ?? "").trim());
 
     if (skill === "reading" || skill === "speaking") {
       if (!hasAudio) {
-        return NextResponse.json({ error: "Audio recording is required" }, { status: 400 });
+        return NextResponse.json({ error: "Audio recording is required." }, { status: 400 });
       }
     } else {
       if (!hasText) {
-        return NextResponse.json({ error: "Text is required" }, { status: 400 });
+        return NextResponse.json({ error: "Text response is required." }, { status: 400 });
       }
     }
 
-    // LOCK immediately and award RP
+    // ── Lock submission + award RP ────────────────────────────────────────
     const rp = task.rpValue ?? 10;
+
     await prisma.dailySubmission.update({
       where: { id: submission.id },
-      data: {
-        isCompleted: true,
-        submittedAt: new Date(),
-        rpEarned: rp,
-      },
+      data: { isCompleted: true, submittedAt: new Date(), rpEarned: rp },
     });
 
     await prisma.rpEvent.create({
@@ -137,7 +134,7 @@ export async function POST(
       },
     });
 
-    // Cache for “inactive 24h”
+    // Update last activity timestamp for inactivity monitor
     await prisma.child.update({
       where: { id: child.id },
       data: { lastDailySubmissionAt: new Date() },

@@ -4,6 +4,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
+import { studentFetch } from "@/lib/fetchWithAuth";
 
 type SkillType = "reading" | "listening" | "writing" | "speaking";
 
@@ -60,13 +61,32 @@ export default function StudentDailyTaskPage() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<BlobPart[]>([]);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [elapsed, setElapsed] = useState(0);
   const [submitting, setSubmitting] = useState(false);
 
+  const MAX_RECORDING_SECONDS = 600; // 10 minutes
+
+  function formatDuration(seconds: number): string {
+    const m = Math.floor(seconds / 60).toString().padStart(2, "0");
+    const s = (seconds % 60).toString().padStart(2, "0");
+    return `${m}:${s}`;
+  }
+
+  function clearRecordingTimer() {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setElapsed(0);
+  }
+
+  // Separated load function so it can also be called after submit
   async function load(id: string) {
     setLoading(true);
     setErr(null);
     setMsg(null);
-    const res = await fetch(`/api/student/daily-tasks/${id}`);
+    const res = await studentFetch(`/api/student/daily-tasks/${id}`);
     const data = (await res.json().catch(() => ({}))) as TaskDetail & { error?: string };
     if (!res.ok) { setErr(data.error ?? "Failed to load task."); setLoading(false); return; }
     setDetail(data);
@@ -87,8 +107,32 @@ export default function StudentDailyTaskPage() {
 
   useEffect(() => {
     if (!taskId) return;
-    void load(taskId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    let cancelled = false;
+    const run = async () => {
+      setLoading(true);
+      setErr(null);
+      setMsg(null);
+      const res = await studentFetch(`/api/student/daily-tasks/${taskId}`);
+      const data = (await res.json().catch(() => ({}))) as TaskDetail & { error?: string };
+      if (cancelled) return;
+      if (!res.ok) { setErr(data.error ?? "Failed to load task."); setLoading(false); return; }
+      setDetail(data);
+
+      const skill = data.task.skill;
+      const existing = data.existingSubmission;
+      if (existing) {
+        const art = existing.artifacts.find((a) => a.skill === skill);
+        if ((skill === "listening" || skill === "writing") && art?.textBody) {
+          setTextResponse(art.textBody);
+        }
+        if ((skill === "reading" || skill === "speaking") && art?.fileId) {
+          setAudioFileId(art.fileId);
+        }
+      }
+      setLoading(false);
+    };
+    void run();
+    return () => { cancelled = true; };
   }, [taskId]);
 
   const isLocked = useMemo(
@@ -118,8 +162,8 @@ export default function StudentDailyTaskPage() {
     }
 
     try {
-      // Step 1: Presign
-      const presignRes = await fetch("/api/upload/presign", {
+      // Step 1: Presign — studentFetch handles 401 → redirect
+      const presignRes = await studentFetch("/api/upload/presign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -139,10 +183,10 @@ export default function StudentDailyTaskPage() {
       }
       const { presignedUrl, fileId } = presignData as { presignedUrl: string; fileId: string };
 
-      // Step 2: PUT to R2
+      // Step 2: PUT directly to R2 — raw fetch intentional, this is a Cloudflare URL
       const r2Res = await fetch(presignedUrl, {
         method: "PUT",
-        headers: { "Content-Type": mimeType, "Content-Length": String(audioBlob.size) },
+        headers: { "Content-Type": mimeType },
         body: audioBlob,
       });
       if (!r2Res.ok) {
@@ -151,8 +195,8 @@ export default function StudentDailyTaskPage() {
         return null;
       }
 
-      // Step 3: Confirm
-      const confirmRes = await fetch("/api/upload/confirm", {
+      // Step 3: Confirm — studentFetch handles 401 → redirect
+      const confirmRes = await studentFetch("/api/upload/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -195,7 +239,7 @@ export default function StudentDailyTaskPage() {
       if (!fid) { setSubmitting(false); return; }
     }
 
-    const res = await fetch(`/api/student/daily-tasks/${detail.task.id}/submit`, {
+    const res = await studentFetch(`/api/student/daily-tasks/${detail.task.id}/submit`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -218,6 +262,7 @@ export default function StudentDailyTaskPage() {
 
   function startRecording() {
     setErr(null);
+    clearRecordingTimer();
     navigator.mediaDevices
       .getUserMedia({ audio: true })
       .then((stream) => {
@@ -228,24 +273,38 @@ export default function StudentDailyTaskPage() {
           if (e.data?.size > 0) chunksRef.current.push(e.data);
         };
         recorder.onstop = () => {
+          clearRecordingTimer();
           stream.getTracks().forEach((t) => t.stop());
           const blob = new Blob(chunksRef.current, { type: "audio/webm" });
           setAudioBlob(blob);
           setAudioUrl(URL.createObjectURL(blob));
           setAudioFileId(null); // new recording invalidates previous upload
+          setRecording(false);
         };
         recorder.start();
         setRecording(true);
+
+        // Start elapsed timer — auto-stop at MAX_RECORDING_SECONDS
+        let secs = 0;
+        timerRef.current = setInterval(() => {
+          secs += 1;
+          setElapsed(secs);
+          if (secs >= MAX_RECORDING_SECONDS) {
+            if (recorder.state !== "inactive") recorder.stop();
+          }
+        }, 1000);
       })
       .catch((e: Error) => setErr(`Mic error: ${e.name} — ${e.message}`));
   }
 
   function stopRecording() {
     mediaRecorderRef.current?.stop();
-    setRecording(false);
+    // Timer and recording state cleared inside onstop handler
   }
 
   function deleteRecording() {
+    clearRecordingTimer();
+    setRecording(false);
     setAudioBlob(null);
     if (audioUrl) URL.revokeObjectURL(audioUrl);
     setAudioUrl(null);
@@ -326,7 +385,7 @@ export default function StudentDailyTaskPage() {
               Record audio. You can delete and re-record until you submit.
             </p>
             <div className="mt-3 flex flex-col gap-2">
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {!recording ? (
                   <button
                     className="rounded border px-3 py-1 text-sm"
@@ -364,7 +423,21 @@ export default function StudentDailyTaskPage() {
                     Delete recording
                   </button>
                 )}
+
+                {recording && (() => {
+                  const remaining = MAX_RECORDING_SECONDS - elapsed;
+                  const nearLimit = remaining <= 60;
+                  return (
+                    <span className={`text-sm font-mono ${nearLimit ? "text-red-600 font-bold" : "text-gray-600"}`}>
+                      {nearLimit ? `⚠ ${formatDuration(remaining)} remaining` : `🔴 ${formatDuration(elapsed)}`}
+                    </span>
+                  );
+                })()}
               </div>
+
+              {recording && MAX_RECORDING_SECONDS - elapsed <= 60 && (
+                <p className="text-xs text-red-600">Recording will stop automatically at 10 minutes.</p>
+              )}
 
               {audioUrl && <audio controls src={audioUrl} />}
               {audioFileId && (

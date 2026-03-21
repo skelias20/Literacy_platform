@@ -3,6 +3,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type SkillType = "reading" | "listening" | "writing" | "speaking";
 type LiteracyLevel = "foundational" | "functional" | "transitional" | "advanced";
@@ -39,23 +40,47 @@ type ContentItem = {
 
 const SKILLS: SkillType[] = ["reading", "listening", "writing", "speaking"];
 const LEVELS: LiteracyLevel[] = ["foundational", "functional", "transitional", "advanced"];
-const CONTENT_TYPES: ContentType[] = [
-  "passage_text",
-  "passage_audio",
-  "pdf_document",
-  "writing_prompt",
-  "speaking_prompt",
-  "questions",
-];
-const MAX_BYTES: Record<string, number> = {
-  "application/pdf": 50 * 1024 * 1024,
-  "audio/mpeg": 50 * 1024 * 1024,
+
+// ── Skill → allowed content types ─────────────────────────────────────────
+// This map is the single source of truth for what content types are valid
+// per skill. It drives the type dropdown, file accept attr, and upload
+// validation. When new formats are added (e.g. question bank for listening),
+// add them here — the UI and backend both derive from this map.
+//
+// NOTE: "questions" and "passage_text" types are intentionally excluded from
+// all skills until the task polymorphism + question bank architecture is built
+// (P2 checklist). Do not add them prematurely.
+const SKILL_CONTENT_TYPES: Record<SkillType, ContentType[]> = {
+  reading:  ["pdf_document"],
+  listening: ["passage_audio"],
+  writing:  ["writing_prompt"],
+  speaking: ["speaking_prompt", "passage_audio"],
 };
-const ALLOWED_MIME: Record<string, string[]> = {
-  pdf_document: ["application/pdf"],
-  passage_audio: ["audio/mpeg"],
-  speaking_prompt: ["audio/mpeg"],
+
+// Types that require a file upload (vs text-only)
+const FILE_REQUIRED_TYPES: ContentType[] = ["pdf_document", "passage_audio"];
+
+// MIME types accepted per content type
+const CONTENT_TYPE_MIME: Record<ContentType, string[]> = {
+  pdf_document:    ["application/pdf"],
+  passage_audio:   ["audio/mpeg"],
+  writing_prompt:  [],
+  speaking_prompt: [],
+  questions:       [],
+  passage_text:    [],
 };
+
+// Human-readable labels for content types
+const CONTENT_TYPE_LABELS: Record<ContentType, string> = {
+  pdf_document:    "PDF Document",
+  passage_audio:   "Audio File (MP3)",
+  writing_prompt:  "Writing Prompt (text)",
+  speaking_prompt: "Speaking Prompt (text)",
+  questions:       "Question Bank",
+  passage_text:    "Passage Text",
+};
+
+const MAX_BYTES = 50 * 1024 * 1024; // 50MB for all file types
 
 function formatBytes(b: string | number): string {
   const n = Number(b);
@@ -81,13 +106,24 @@ export default function AdminContentPage() {
   const [formDescription, setFormDescription] = useState("");
   const [formSkill, setFormSkill] = useState<SkillType>("reading");
   const [formLevel, setFormLevel] = useState<"all" | LiteracyLevel>("all");
-  const [formType, setFormType] = useState<ContentType>("pdf_document");
+  // Default type is the first allowed type for the default skill (reading → pdf_document)
+  const [formType, setFormType] = useState<ContentType>(SKILL_CONTENT_TYPES.reading[0]);
   const [formTextBody, setFormTextBody] = useState("");
   const [formFile, setFormFile] = useState<File | null>(null);
   const [formFileId, setFormFileId] = useState<string | null>(null);
   const [formFileUploading, setFormFileUploading] = useState(false);
   const [formFileErr, setFormFileErr] = useState<string | null>(null);
   const [formSaving, setFormSaving] = useState(false);
+
+  // When skill changes: reset type to the first valid type for the new skill,
+  // and clear any pending file since it may no longer be the right format.
+  function handleSkillChange(skill: SkillType) {
+    setFormSkill(skill);
+    setFormType(SKILL_CONTENT_TYPES[skill][0]);
+    setFormFile(null);
+    setFormFileId(null);
+    setFormFileErr(null);
+  }
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -111,7 +147,7 @@ export default function AdminContentPage() {
     if (filterSkill !== "all") qs.set("skill", filterSkill);
     if (filterLevel !== "all") qs.set("level", filterLevel);
     if (showDeleted) qs.set("includeDeleted", "true");
-    const res = await fetch(`/api/admin/content?${qs.toString()}`);
+    const res = await adminFetch(`/api/admin/content?${qs.toString()}`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) { setErr(data.error ?? "Failed to load."); setLoading(false); return; }
     setItems(data.items ?? []);
@@ -131,7 +167,7 @@ export default function AdminContentPage() {
       if (filterSkill !== "all") qs.set("skill", filterSkill);
       if (filterLevel !== "all") qs.set("level", filterLevel);
       if (showDeleted) qs.set("includeDeleted", "true");
-      const res = await fetch(`/api/admin/content?${qs.toString()}`);
+      const res = await adminFetch(`/api/admin/content?${qs.toString()}`);
       const data = await res.json().catch(() => ({}));
       if (cancelled) return;
       if (!res.ok) { setErr(data.error ?? "Failed to load."); setLoading(false); return; }
@@ -151,21 +187,20 @@ export default function AdminContentPage() {
     setFormFileErr(null);
     if (!file) return;
 
-    const allowedForType = ALLOWED_MIME[formType];
-    if (allowedForType && !allowedForType.includes(file.type)) {
-      setFormFileErr(`This content type only accepts: ${allowedForType.join(", ")}`);
+    const allowedMime = CONTENT_TYPE_MIME[formType];
+    if (allowedMime.length > 0 && !allowedMime.includes(file.type)) {
+      setFormFileErr(`This content type only accepts: ${allowedMime.join(", ")}`);
       return;
     }
-    const maxBytes = MAX_BYTES[file.type] ?? 50 * 1024 * 1024;
-    if (file.size > maxBytes) {
-      setFormFileErr(`File exceeds ${formatBytes(maxBytes)} limit.`);
+    if (file.size > MAX_BYTES) {
+      setFormFileErr(`File exceeds ${formatBytes(MAX_BYTES)} limit.`);
       return;
     }
 
     setFormFileUploading(true);
     try {
       // Step 1: Presign
-      const presignRes = await fetch("/api/upload/presign", {
+      const presignRes = await adminFetch("/api/upload/presign", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -183,10 +218,10 @@ export default function AdminContentPage() {
       }
       const { presignedUrl, fileId } = presignData as { presignedUrl: string; fileId: string };
 
-      // Step 2: PUT to R2
+      // Step 2: PUT to R2 — raw fetch intentional, this is a Cloudflare URL
       const r2Res = await fetch(presignedUrl, {
         method: "PUT",
-        headers: { "Content-Type": file.type, "Content-Length": String(file.size) },
+        headers: { "Content-Type": file.type },
         body: file,
       });
       if (!r2Res.ok) {
@@ -196,7 +231,7 @@ export default function AdminContentPage() {
       }
 
       // Step 3: Confirm
-      const confirmRes = await fetch("/api/upload/confirm", {
+      const confirmRes = await adminFetch("/api/upload/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fileId, context: "admin_content" }),
@@ -218,9 +253,8 @@ export default function AdminContentPage() {
 
   async function saveContent() {
     if (!formTitle.trim()) { setErr("Title is required."); return; }
-    const needsFile = ["pdf_document", "passage_audio"].includes(formType);
-    if (needsFile && !formFileId) {
-      setErr("Please upload a file for this content type.");
+    if (FILE_REQUIRED_TYPES.includes(formType) && !formFileId) {
+      setErr(`A file upload is required for ${CONTENT_TYPE_LABELS[formType]}.`);
       return;
     }
 
@@ -228,7 +262,7 @@ export default function AdminContentPage() {
     setErr(null);
     setMsg(null);
 
-    const res = await fetch("/api/admin/content", {
+    const res = await adminFetch("/api/admin/content", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -253,7 +287,7 @@ export default function AdminContentPage() {
     setFormDescription("");
     setFormSkill("reading");
     setFormLevel("all");
-    setFormType("pdf_document");
+    setFormType(SKILL_CONTENT_TYPES.reading[0]);
     setFormTextBody("");
     setFormFile(null);
     setFormFileId(null);
@@ -262,7 +296,7 @@ export default function AdminContentPage() {
 
   async function saveEdit(id: string) {
     setEditSaving(true);
-    const res = await fetch("/api/admin/content", {
+    const res = await adminFetch("/api/admin/content", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -283,7 +317,7 @@ export default function AdminContentPage() {
   async function deleteItem(id: string, force = false) {
     setErr(null);
     setMsg(null);
-    const res = await fetch("/api/admin/content", {
+    const res = await adminFetch("/api/admin/content", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, force }),
@@ -399,7 +433,7 @@ export default function AdminContentPage() {
               <select
                 className="mt-1 w-full rounded border px-3 py-2 text-sm"
                 value={formSkill}
-                onChange={(e) => setFormSkill(e.target.value as SkillType)}
+                onChange={(e) => handleSkillChange(e.target.value as SkillType)}
               >
                 {SKILLS.map((s) => <option key={s} value={s} className="capitalize">{s}</option>)}
               </select>
@@ -420,16 +454,27 @@ export default function AdminContentPage() {
               <select
                 className="mt-1 w-full rounded border px-3 py-2 text-sm"
                 value={formType}
-                onChange={(e) => setFormType(e.target.value as ContentType)}
+                onChange={(e) => {
+                  setFormType(e.target.value as ContentType);
+                  // Clear file if switching to a text-only type
+                  if (!FILE_REQUIRED_TYPES.includes(e.target.value as ContentType)) {
+                    setFormFile(null);
+                    setFormFileId(null);
+                    setFormFileErr(null);
+                  }
+                }}
               >
-                {CONTENT_TYPES.map((t) => (
-                  <option key={t} value={t}>{t.replace(/_/g, " ")}</option>
+                {SKILL_CONTENT_TYPES[formSkill].map((t) => (
+                  <option key={t} value={t}>{CONTENT_TYPE_LABELS[t]}</option>
                 ))}
               </select>
+              <p className="mt-1 text-xs text-gray-500">
+                Only types valid for the <span className="font-medium capitalize">{formSkill}</span> skill are shown.
+              </p>
             </div>
           </div>
 
-          {/* Text body for prompts */}
+          {/* Text body for text-only types */}
           {(formType === "writing_prompt" || formType === "speaking_prompt" ||
             formType === "passage_text" || formType === "questions") && (
             <div className="mt-3">
@@ -444,15 +489,15 @@ export default function AdminContentPage() {
             </div>
           )}
 
-          {/* File upload for PDF/audio */}
-          {(formType === "pdf_document" || formType === "passage_audio") && (
+          {/* File upload — only shown for types that require a file */}
+          {FILE_REQUIRED_TYPES.includes(formType) && (
             <div className="mt-3">
               <label className="text-sm font-medium">
-                Upload File ({formType === "pdf_document" ? "PDF, max 50MB" : "MP3, max 50MB"})
+                Upload File ({CONTENT_TYPE_LABELS[formType]}, max {formatBytes(MAX_BYTES)})
               </label>
               <input
                 type="file"
-                accept={formType === "pdf_document" ? "application/pdf" : "audio/mpeg"}
+                accept={CONTENT_TYPE_MIME[formType].join(",")}
                 className="mt-1 w-full rounded border px-3 py-2 text-sm"
                 onChange={handleFileChange}
                 disabled={formFileUploading}

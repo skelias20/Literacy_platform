@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function AdminLoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sessionExpired = searchParams.get("expired") === "1";
+
   const [email, setEmail] = useState("admin@local.test");
   const [password, setPassword] = useState("Admin123!");
   const [loading, setLoading] = useState(false);
@@ -37,6 +40,12 @@ export default function AdminLoginPage() {
       <div className="w-full max-w-sm rounded border p-6">
         <h1 className="text-2xl font-bold">Admin Login</h1>
         <p className="mt-1 text-sm text-gray-600">Use your admin credentials.</p>
+
+        {sessionExpired && (
+          <div className="mt-3 rounded border border-yellow-300 bg-yellow-50 px-3 py-2 text-sm text-yellow-800">
+            Your session has expired. Please sign in again.
+          </div>
+        )}
 
         <form className="mt-4 space-y-3" onSubmit={onSubmit}>
           <div>

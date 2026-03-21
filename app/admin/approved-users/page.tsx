@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { adminFetch } from "@/lib/fetchWithAuth";
 
 type ChildRow = {
   id: string;
@@ -26,31 +27,25 @@ export default function ApprovedUsersPage() {
   async function load() {
     setLoading(true);
     setMsg(null);
-    const res = await fetch("/api/admin/approved-users");
+    const res = await adminFetch("/api/admin/approved-users");
     const data = await res.json();
     setRows(data.children ?? []);
     setLoading(false);
   }
 
   useEffect(() => {
-    let alive = true;
-  
-    (async () => {
+    let cancelled = false;
+    const run = async () => {
       setLoading(true);
       setMsg(null);
-  
-      const res = await fetch("/api/admin/approved-users");
+      const res = await adminFetch("/api/admin/approved-users");
       const data = await res.json();
-  
-      if (!alive) return;
-  
+      if (cancelled) return;
       setRows(data.children ?? []);
       setLoading(false);
-    })();
-  
-    return () => {
-      alive = false;
     };
+    void run();
+    return () => { cancelled = true; };
   }, []);
   
 
@@ -61,7 +56,7 @@ export default function ApprovedUsersPage() {
       return;
     }
 
-    const res = await fetch(
+    const res = await adminFetch(
       `/api/admin/approved-users/${id}/create-credentials`,
       {
         method: "POST",

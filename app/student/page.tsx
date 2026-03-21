@@ -3,6 +3,7 @@ import Link from "next/link";
 import { cookies } from "next/headers";
 import { verifyStudentJwt } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import LogoutButton from "./LogoutButton";
 
 function startOfTodayUtc(): Date {
   const now = new Date();
@@ -98,7 +99,10 @@ export default async function StudentHomePage() {
 
   return (
     <main className="p-10">
-      <h1 className="text-3xl font-bold">Student Dashboard</h1>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-3xl font-bold">Student Dashboard</h1>
+        <LogoutButton />
+      </div>
 
       <div className="mt-4 rounded border p-4">
         <p className="font-medium">

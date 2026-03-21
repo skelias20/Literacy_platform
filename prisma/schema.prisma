@@ -85,6 +85,7 @@ enum AuditAction {
   DAILY_SKILL_FOCUS_SET
   CONTENT_CREATED
   CONTENT_ASSIGNED
+  STUDENT_PROFILE_EDITED  
 }
 
 enum UploadStatus {
@@ -149,10 +150,13 @@ model Child {
   childLastName  String
   grade          Int
   dateOfBirth    DateTime
+  subjects       String[]  // Optional favourite subjects
 
   // Admin-assigned credentials (nullable until created)
   username     String? @unique
   passwordHash String?
+
+  
 
   credentialsCreatedById String?
   credentialsCreatedBy   Admin?    @relation("CredentialsCreatedByAdmin", fields: [credentialsCreatedById], references: [id], onDelete: SetNull)
@@ -169,6 +173,8 @@ model Child {
 
   // For "inactive 24h" admin list (cache for fast queries)
   lastDailySubmissionAt DateTime?
+  archivedAt            DateTime?
+
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -184,6 +190,8 @@ model Child {
   @@index([status])
   @@index([parentId])
   @@index([lastDailySubmissionAt])
+  @@index([level])
+  @@index([archivedAt])
 }
 
 //
@@ -319,6 +327,7 @@ model DailyTask {
 
   @@index([taskDate])
   @@index([skill, level])
+  @@index([taskDate, level])
 }
 
 model DailyTaskContent {
@@ -354,6 +363,7 @@ model DailySubmission {
   @@unique([childId, dailyTaskId])
   @@index([childId])
   @@index([submittedAt])
+  @@index([dailyTaskId])
 }
 
 model DailySubmissionArtifact {

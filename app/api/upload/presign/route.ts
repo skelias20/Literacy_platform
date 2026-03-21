@@ -1,8 +1,9 @@
 // app/api/upload/presign/route.ts
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
+import { verifyAdminJwt, verifyStudentJwt } from "@/lib/auth";
 import {
   generateFileId,
   generatePresignedPutUrl,
@@ -11,41 +12,44 @@ import {
   type UploadContext,
 } from "@/lib/r2";
 import { rateLimit, getClientIp, RATE_LIMITS } from "@/lib/rateLimit";
+import { parseBody } from "@/lib/parseBody";
 
 export const runtime = "nodejs";
 
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
+// ── Presign request schema ────────────────────────────────────────────────
+const VALID_CONTEXTS = [
+  "receipt",
+  "assessment_audio",
+  "daily_audio",
+  "admin_content",
+] as const;
 
-const SECRET = mustGetEnv("JWT_SECRET");
-
-type PresignBody = {
-  context: UploadContext;
-  mimeType: string;
-  byteSize: number;
-  originalName: string;
-  // Context-specific linking fields
-  assessmentId?: string;
-  skill?: string;
-  taskId?: string;
-};
+const PresignSchema = z.object({
+  context:      z.enum(VALID_CONTEXTS),
+  mimeType:     z.string().min(1).max(128).trim(),
+  byteSize:     z.number().int().positive().max(100 * 1024 * 1024), // hard ceiling 100MB
+  originalName: z.string().min(1).max(255).trim(),
+  // Context-specific linking fields — optional at schema level,
+  // enforced by context-specific business logic checks below
+  assessmentId: z.string().max(128).trim().optional(),
+  skill:        z.string().max(32).trim().optional(),
+  taskId:       z.string().max(128).trim().optional(),
+});
 
 export async function POST(req: Request) {
-  try {
-    // ── DIAGNOSTIC: log every step to trace the 403 ───────────────────────
-    const diag: Record<string, unknown> = {};
-    const deny = (status: number, error: string, extra?: Record<string, unknown>) => {
-      const payload = { error, diag: { ...diag, ...(extra ?? {}) } };
-      console.warn(`[upload/presign] deny ${status} ${error}`, payload.diag);
-      return NextResponse.json(payload, {
-        status,
-        headers: { "cache-control": "no-store" },
-      });
-    };
+  // Diagnostic object — helps trace auth failures in logs
+  const diag: Record<string, unknown> = {};
 
+  const deny = (status: number, error: string, extra?: Record<string, unknown>) => {
+    const payload = { error, diag: { ...diag, ...(extra ?? {}) } };
+    console.warn(`[upload/presign] deny ${status} ${error}`, payload.diag);
+    return NextResponse.json(payload, {
+      status,
+      headers: { "cache-control": "no-store" },
+    });
+  };
+
+  try {
     // ── Rate limit ────────────────────────────────────────────────────────
     const ip = getClientIp(req);
     diag.ip = ip;
@@ -53,139 +57,108 @@ export async function POST(req: Request) {
 
     const rl = rateLimit(`presign:${ip}`, RATE_LIMITS.presign);
     diag.rateLimitAllowed = rl.allowed;
-
     if (!rl.allowed) {
       return deny(429, "Too many requests", {
         retryAfterMs: (rl as { retryAfterMs: number }).retryAfterMs,
       });
     }
 
-    // Read body early so we can select the right auth token.
-    // If both admin + student cookies exist (common in dev), we must prefer the
-    // cookie that matches the requested upload context.
-    const body = (await req.json()) as Partial<PresignBody>;
-    const context = body.context;
-    diag.context = context;
+    // ── Parse + validate input ────────────────────────────────────────────
+    // Body must be read before cookies to get context for auth selection.
+    const rawBody = await req.json().catch(() => null);
+    const parsed = parseBody(PresignSchema, rawBody, "upload/presign");
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
 
-    // ── Auth — determine who is uploading ──────────────────────────────────
+    diag.context = body.context;
+
+    // ── Auth — context-aware token selection ──────────────────────────────
+    // Use the canonical verifiers from lib/auth.ts which enforce role claim
+    // and algorithm restriction. The old inline jwt.verify calls are replaced.
     const cookieStore = await cookies();
-    const adminToken = cookieStore.get("admin_token")?.value;
+    const adminToken   = cookieStore.get("admin_token")?.value;
     const studentToken = cookieStore.get("student_token")?.value;
-    diag.hasAdminToken = !!adminToken;
+    diag.hasAdminToken   = !!adminToken;
     diag.hasStudentToken = !!studentToken;
 
-    const wantsStudent =
-      context === "assessment_audio" || context === "daily_audio";
-    const wantsAdmin = context === "admin_content";
+    const wantsStudent = body.context === "assessment_audio" || body.context === "daily_audio";
+    const wantsAdmin   = body.context === "admin_content";
     diag.wantsStudent = wantsStudent;
-    diag.wantsAdmin = wantsAdmin;
+    diag.wantsAdmin   = wantsAdmin;
 
-    let uploaderId: string | null = null;
+    let uploaderId:    string | null = null;
     let uploaderType: "admin" | "student" | null = null;
 
-    const tryStudent = async () => {
+    const tryStudent = () => {
       if (!studentToken) return;
       try {
-        const p = jwt.verify(studentToken, SECRET) as jwt.JwtPayload;
-        if (typeof p.childId === "string") {
-          uploaderId = p.childId;
-          uploaderType = "student";
-          diag.studentTokenValid = true;
-        } else {
-          diag.studentTokenValid = false;
-          diag.studentTokenFields = Object.keys(p);
-        }
+        const p = verifyStudentJwt(studentToken);
+        uploaderId   = p.childId;
+        uploaderType = "student";
+        diag.studentTokenValid = true;
       } catch (e) {
         diag.studentTokenError = e instanceof Error ? e.message : String(e);
       }
     };
 
-    const tryAdmin = async () => {
+    const tryAdmin = () => {
       if (!adminToken) return;
       try {
-        const p = jwt.verify(adminToken, SECRET) as jwt.JwtPayload;
-        if (typeof p.adminId === "string") {
-          uploaderId = p.adminId;
-          uploaderType = "admin";
-          diag.adminTokenValid = true;
-        } else {
-          diag.adminTokenValid = false;
-          diag.adminTokenFields = Object.keys(p);
-        }
+        const p = verifyAdminJwt(adminToken);
+        uploaderId   = p.adminId;
+        uploaderType = "admin";
+        diag.adminTokenValid = true;
       } catch (e) {
         diag.adminTokenError = e instanceof Error ? e.message : String(e);
       }
     };
 
-    // Prefer the token that matches the context.
+    // Prefer the token that matches the context
     if (wantsStudent) {
-      await tryStudent();
-      if (!uploaderId) await tryAdmin();
+      tryStudent();
+      if (!uploaderId) tryAdmin();
     } else if (wantsAdmin) {
-      await tryAdmin();
-      if (!uploaderId) await tryStudent();
+      tryAdmin();
+      if (!uploaderId) tryStudent();
     } else {
-      // receipt (or unknown) — try both, order doesn't matter
-      await tryStudent();
-      if (!uploaderId) await tryAdmin();
+      // receipt — unauthenticated, try both anyway for logging
+      tryStudent();
+      if (!uploaderId) tryAdmin();
     }
 
-    diag.uploaderId = uploaderId ? "SET" : null;
+    diag.uploaderId   = uploaderId ? "SET" : null;
     diag.uploaderType = uploaderType;
 
     // Receipt uploads come from unauthenticated registration flow
-    const isRegistrationReceipt = context === "receipt";
-
+    const isRegistrationReceipt = body.context === "receipt";
     if (!isRegistrationReceipt && !uploaderId) {
       return deny(401, "Unauthorized");
     }
 
-    // ── Validate context ──────────────────────────────────────────────────
-    const validContexts: UploadContext[] = [
-      "receipt",
-      "assessment_audio",
-      "daily_audio",
-      "admin_content",
-    ];
-    if (!context || !validContexts.includes(context)) {
-      return deny(400, "Invalid context");
-    }
-
-    // Admin-only contexts
-    if (context === "admin_content" && uploaderType !== "admin") {
+    // ── Role enforcement ──────────────────────────────────────────────────
+    if (body.context === "admin_content" && uploaderType !== "admin") {
       return deny(403, "Forbidden: admin_content requires admin");
     }
-
-    // Student-only contexts
     if (
-      (context === "assessment_audio" || context === "daily_audio") &&
+      (body.context === "assessment_audio" || body.context === "daily_audio") &&
       uploaderType !== "student"
     ) {
       return deny(403, "Forbidden: assessment_audio/daily_audio requires student");
     }
 
-    const mimeType = (body.mimeType ?? "").trim();
-    const byteSize = Number(body.byteSize ?? 0);
-    const originalName = (body.originalName ?? "upload").trim();
-
-    // ── Validate file constraints ─────────────────────────────────────────
-    const validation = validateUpload(context, mimeType, byteSize);
+    // ── File constraints (size + MIME via existing validateUpload) ────────
+    const validation = validateUpload(body.context, body.mimeType, body.byteSize);
     if (!validation.ok) {
       return deny(400, validation.error);
     }
 
-    // ── Context-specific validation ───────────────────────────────────────
-    const skill = body.skill;
-    const taskId = body.taskId;
-    const assessmentId = body.assessmentId;
-
-    if (context === "assessment_audio") {
-      if (!assessmentId || !skill) {
+    // ── Context-specific business logic ───────────────────────────────────
+    if (body.context === "assessment_audio") {
+      if (!body.assessmentId || !body.skill) {
         return deny(400, "assessmentId and skill required for assessment_audio");
       }
-      // Verify assessment belongs to this student
       const assessment = await prisma.assessment.findUnique({
-        where: { id: assessmentId },
+        where: { id: body.assessmentId },
         select: { childId: true, submittedAt: true },
       });
       if (!assessment || assessment.childId !== uploaderId) {
@@ -196,72 +169,62 @@ export async function POST(req: Request) {
       }
     }
 
-    if (context === "daily_audio") {
-      if (!taskId || !skill) {
+    if (body.context === "daily_audio") {
+      if (!body.taskId || !body.skill) {
         return deny(400, "taskId and skill required for daily_audio");
       }
-      // Verify task exists and student has access
       const task = await prisma.dailyTask.findUnique({
-        where: { id: taskId },
+        where: { id: body.taskId },
         select: { level: true, skill: true },
       });
-      if (!task) {
-        return deny(404, "Task not found");
-      }
+      if (!task) return deny(404, "Task not found");
+
       const child = await prisma.child.findUnique({
         where: { id: uploaderId! },
         select: { level: true, status: true },
       });
-      if (!child || child.status !== "active") {
-        return deny(403, "Forbidden");
-      }
-      if (task.level !== null && child.level !== task.level) {
-        return deny(404, "Not found");
-      }
-      // Check submission not already locked
+      if (!child || child.status !== "active") return deny(403, "Forbidden");
+      if (task.level !== null && child.level !== task.level) return deny(404, "Not found");
+
       const existing = await prisma.dailySubmission.findUnique({
         where: {
-          childId_dailyTaskId: { childId: uploaderId!, dailyTaskId: taskId },
+          childId_dailyTaskId: { childId: uploaderId!, dailyTaskId: body.taskId },
         },
         select: { isCompleted: true },
       });
-      if (existing?.isCompleted) {
-        return deny(409, "Task already submitted");
-      }
+      if (existing?.isCompleted) return deny(409, "Task already submitted");
     }
 
-    // ── Generate file ID and R2 key ───────────────────────────────────────
+    // ── Generate file ID, R2 key, PENDING File record ─────────────────────
     const fileId = generateFileId();
-    const r2Key = generateR2Key({
-      context,
+    const r2Key  = generateR2Key({
+      context:  body.context,
       fileId,
-      mimeType,
-      childId: uploaderType === "student" ? uploaderId! : undefined,
-      skill,
-      taskId,
-      adminId: uploaderType === "admin" ? uploaderId! : undefined,
+      mimeType: body.mimeType,
+      childId:  uploaderType === "student" ? uploaderId! : undefined,
+      skill:    body.skill,
+      taskId:   body.taskId,
+      adminId:  uploaderType === "admin"   ? uploaderId! : undefined,
     });
 
-    // ── Create PENDING File record ────────────────────────────────────────
     await prisma.file.create({
       data: {
-        id: fileId,
-        storageKey: r2Key,
+        id:               fileId,
+        storageKey:       r2Key,
         r2Key,
-        originalName,
-        mimeType,
-        byteSize: BigInt(byteSize),
-        uploadStatus: "PENDING",
+        originalName:     body.originalName,
+        mimeType:         body.mimeType,
+        byteSize:         BigInt(body.byteSize),
+        uploadStatus:     "PENDING",
         uploadedByChildId: uploaderType === "student" ? uploaderId : null,
-        uploadedByAdminId: uploaderType === "admin" ? uploaderId : null,
+        uploadedByAdminId: uploaderType === "admin"   ? uploaderId : null,
       },
     });
 
-    // ── Generate presigned URL ────────────────────────────────────────────
     const presignedUrl = await generatePresignedPutUrl({
       r2Key,
-      mimeType,
-      byteSize,
+      mimeType: body.mimeType,
+      byteSize: body.byteSize,
     });
 
     return NextResponse.json({ presignedUrl, fileId, r2Key });
