@@ -198,12 +198,48 @@ async function linkArtifact(params: {
       const skill = body.skill as SkillType | undefined;
       if (!assessmentId || !skill) break;
 
+      // Look up the assessment so we can find the correct content slot and stamp
+      // contentItemId onto the artifact. Without this, reading and speaking artifacts
+      // are created without a source-content link, making admin review incomplete.
+      const assessment = await prisma.assessment.findUnique({
+        where: { id: assessmentId },
+        select: {
+          kind: true,
+          sessionNumber: true,
+          lookupLevel: true,
+          child: { select: { level: true } },
+        },
+      });
+
+      let contentItemId: string | null = null;
+      if (assessment) {
+        // Periodic assessments re-use session-1 slots regardless of their sessionNumber.
+        const slotSessionNumber = assessment.kind === "periodic" ? 1 : assessment.sessionNumber;
+        const effectiveLevel =
+          assessment.lookupLevel ??
+          (assessment.kind === "initial"
+            ? "foundational"
+            : (assessment.child.level ?? "foundational"));
+
+        const slot = await prisma.assessmentDefaultContent.findUnique({
+          where: {
+            level_skill_sessionNumber: {
+              level: effectiveLevel,
+              skill,
+              sessionNumber: slotSessionNumber,
+            },
+          },
+          select: { contentItemId: true },
+        });
+        contentItemId = slot?.contentItemId ?? null;
+      }
+
       // Upsert: delete existing file artifact for this skill, create new one
       await prisma.assessmentArtifact.deleteMany({
         where: { assessmentId, skill, fileId: { not: null } },
       });
       await prisma.assessmentArtifact.create({
-        data: { assessmentId, skill, fileId: file.id },
+        data: { assessmentId, skill, fileId: file.id, contentItemId },
       });
       break;
     }

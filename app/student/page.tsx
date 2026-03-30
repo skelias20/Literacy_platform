@@ -7,11 +7,7 @@ import LogoutButton from "./LogoutButton";
 
 function startOfTodayUtc(): Date {
   const now = new Date();
-  // we store taskDate as 00:00Z in your app layer; match that.
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth();
-  const d = now.getUTCDate();
-  return new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0));
 }
 
 export default async function StudentHomePage() {
@@ -23,9 +19,7 @@ export default async function StudentHomePage() {
       <main className="p-10">
         <p>
           Not authenticated.{" "}
-          <Link className="underline" href="/student/login">
-            Go to login
-          </Link>
+          <Link className="underline" href="/student/login">Go to login</Link>
         </p>
       </main>
     );
@@ -39,31 +33,91 @@ export default async function StudentHomePage() {
   });
 
   if (!child) {
-    return (
-      <main className="p-10">
-        <p>Account not found.</p>
-      </main>
-    );
+    return <main className="p-10"><p>Account not found.</p></main>;
   }
 
-  // ---- Load today's tasks only if active ----
   const today = startOfTodayUtc();
   let todaysTasks: {
-    id: string;
-    skill: string;
-    level: string | null;
-    isCompleted: boolean;
-    submittedAt: Date | null;
+    id: string; skill: string; level: string | null;
+    isCompleted: boolean; submittedAt: Date | null;
   }[] = [];
-
-  // ---- Total RP ----
   let totalRp = 0;
+
+  // ── Assessment banner states (active students only) ───────────────────
+  let hasPendingInitial       = false; // session created but not yet submitted
+  let hasPendingPeriodic      = false; // periodic triggered, not yet submitted
+  let hasSubmittedPeriodic    = false; // periodic submitted, awaiting admin review
+  let shouldRecommendTomorrow = false; // previous session was submitted today
+
   if (child.status === "active") {
     const rpAgg = await prisma.rpEvent.aggregate({
       where: { childId: child.id },
       _sum: { delta: true },
     });
     totalRp = rpAgg._sum.delta ?? 0;
+
+    // Open periodic assessment
+    const openPeriodic = await prisma.assessment.findFirst({
+      where: { childId: child.id, kind: "periodic", isLatest: true, submittedAt: null },
+      select: { id: true },
+    });
+    hasPendingPeriodic = openPeriodic !== null;
+
+    // Submitted periodic awaiting review
+    if (!hasPendingPeriodic) {
+      const submittedPeriodic = await prisma.assessment.findFirst({
+        where: { childId: child.id, kind: "periodic", isLatest: true, submittedAt: { not: null }, assignedLevel: null },
+        select: { id: true },
+      });
+      hasSubmittedPeriodic = submittedPeriodic !== null;
+    }
+
+    // Time-aware label: check if the next pending session was preceded by a
+    // submission that happened today (same UTC date).
+    // Applies to both initial multi-session flow and periodic.
+    const openInitial = await prisma.assessment.findFirst({
+      where: { childId: child.id, kind: "initial", isLatest: true, submittedAt: null },
+      select: { id: true, sessionNumber: true },
+    });
+    hasPendingInitial = openInitial !== null;
+
+    const tomorrowStart = new Date(today.getTime() + 86_400_000);
+
+    if (hasPendingInitial && openInitial && openInitial.sessionNumber > 1) {
+      const prevSession = await prisma.assessment.findFirst({
+        where: { childId: child.id, kind: "initial", sessionNumber: openInitial.sessionNumber - 1 },
+        select: { submittedAt: true },
+      });
+      if (prevSession?.submittedAt) {
+        const t = prevSession.submittedAt;
+        shouldRecommendTomorrow = t >= today && t < tomorrowStart;
+      }
+    } else if (hasPendingPeriodic) {
+      // Check if there was a previous periodic session submitted today
+      const prevPeriodic = await prisma.assessment.findFirst({
+        where: { childId: child.id, kind: "periodic", submittedAt: { not: null } },
+        orderBy: { submittedAt: "desc" },
+        select: { submittedAt: true },
+      });
+      if (prevPeriodic?.submittedAt) {
+        const t = prevPeriodic.submittedAt;
+        shouldRecommendTomorrow = t >= today && t < tomorrowStart;
+      }
+    }
+  }
+
+  // Session counter for assessment_required students
+  let initialSessionCount = 1;
+  let completedInitialSessions = 0;
+  if (child.status === "assessment_required") {
+    const assessmentConfig = await prisma.assessmentConfig.findFirst({
+      orderBy: { createdAt: "asc" },
+      select: { initialSessionCount: true },
+    });
+    initialSessionCount = assessmentConfig?.initialSessionCount ?? 1;
+    completedInitialSessions = await prisma.assessment.count({
+      where: { childId: child.id, kind: "initial", submittedAt: { not: null } },
+    });
   }
 
   if (child.status === "active") {
@@ -77,9 +131,7 @@ export default async function StudentHomePage() {
       },
       orderBy: [{ skill: "asc" }],
       select: {
-        id: true,
-        skill: true,
-        level: true,
+        id: true, skill: true, level: true,
         submissions: {
           where: { childId: child.id },
           select: { isCompleted: true, submittedAt: true },
@@ -87,11 +139,8 @@ export default async function StudentHomePage() {
         },
       },
     });
-
     todaysTasks = tasks.map((t) => ({
-      id: t.id,
-      skill: t.skill,
-      level: t.level,
+      id: t.id, skill: t.skill, level: t.level,
       isCompleted: t.submissions[0]?.isCompleted ?? false,
       submittedAt: t.submissions[0]?.submittedAt ?? null,
     }));
@@ -110,9 +159,7 @@ export default async function StudentHomePage() {
         </p>
         <p className="text-sm text-gray-700">Username: {child.username}</p>
         <p className="text-sm text-gray-700">Status: {child.status}</p>
-        <p className="text-sm text-gray-700">
-          Level: {child.level ?? "Not assigned yet"}
-        </p>
+        <p className="text-sm text-gray-700">Level: {child.level ?? "Not assigned yet"}</p>
         {child.status === "active" && (
           <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5">
             <span className="text-sm font-bold text-indigo-700">⭐ {totalRp} RP</span>
@@ -121,63 +168,109 @@ export default async function StudentHomePage() {
         )}
       </div>
 
+      {/* Initial assessment required */}
       {child.status === "assessment_required" && (
         <div className="mt-6 rounded border p-4">
-          <p className="font-medium">Initial Assessment Required</p>
+          <div className="flex items-center justify-between gap-4">
+            <p className="font-medium">Initial Assessment Required</p>
+            {initialSessionCount > 1 && (
+              <span className="rounded-full bg-gray-100 px-3 py-0.5 text-xs text-gray-600 shrink-0">
+                Session {completedInitialSessions + 1} of {initialSessionCount}
+              </span>
+            )}
+          </div>
           <p className="mt-1 text-sm text-gray-700">
-            Complete the initial assessment so the admin can assign your level.
+            {completedInitialSessions === 0
+              ? `Complete ${initialSessionCount > 1 ? `all ${initialSessionCount} assessment sessions` : "the initial assessment"} so the admin can assign your level.`
+              : `You've completed ${completedInitialSessions} of ${initialSessionCount} sessions. Continue when you're ready.`}
           </p>
-          <Link
-            className="mt-3 inline-block rounded bg-black px-4 py-2 text-white"
-            href="/student/assessment"
-          >
-            Start Initial Assessment
+          <Link className="mt-3 inline-block rounded bg-black px-4 py-2 text-white" href="/student/assessment">
+            {completedInitialSessions === 0 ? "Start Assessment" : "Continue Assessment"}
           </Link>
         </div>
       )}
 
+      {/* Pending level review */}
       {child.status === "pending_level_review" && (
         <div className="mt-6 rounded border p-4">
           <p className="font-medium">Admin is assessing your level</p>
           <p className="mt-1 text-sm text-gray-700">
-            You already submitted your initial assessment. Please wait for the
-            admin to assign your level. If you log out and log back in, you will
-            still see this page until your level is assigned.
+            You already submitted your assessment. Please wait for the admin to assign your level.
           </p>
         </div>
       )}
 
+      {/* Active: pending next initial session (multi-session flow) */}
+      {child.status === "active" && hasPendingInitial && (
+        <div className="mt-6 rounded border border-amber-300 bg-amber-50 p-4">
+          <p className="font-medium text-amber-900">Next Assessment Session Ready</p>
+          <p className="mt-1 text-sm text-amber-800">
+            Your next assessment session is available. Complete it to finish your placement.
+          </p>
+          {shouldRecommendTomorrow && (
+            <p className="mt-2 text-sm text-amber-700 font-medium">
+              📅 We recommend completing this tomorrow for your best results.
+              A fresh start on a different day gives a more accurate picture of your abilities.
+            </p>
+          )}
+          <Link
+            className="mt-3 inline-block rounded bg-amber-600 px-4 py-2 text-sm text-white"
+            href="/student/assessment"
+          >
+            Continue Assessment
+          </Link>
+        </div>
+      )}
+
+      {/* Active: pending periodic re-evaluation */}
+      {child.status === "active" && hasPendingPeriodic && (
+        <div className="mt-6 rounded border border-amber-300 bg-amber-50 p-4">
+          <p className="font-medium text-amber-900">Re-evaluation Required</p>
+          <p className="mt-1 text-sm text-amber-800">
+            Your teacher has requested a new assessment to review your progress.
+          </p>
+          {shouldRecommendTomorrow && (
+            <p className="mt-2 text-sm text-amber-700 font-medium">
+              📅 We recommend completing this tomorrow for your best results.
+            </p>
+          )}
+          <Link
+            className="mt-3 inline-block rounded bg-amber-600 px-4 py-2 text-sm text-white"
+            href="/student/assessment"
+          >
+            Start Re-evaluation
+          </Link>
+        </div>
+      )}
+
+      {/* Active: submitted periodic, awaiting admin review */}
+      {child.status === "active" && hasSubmittedPeriodic && (
+        <div className="mt-6 rounded border border-blue-200 bg-blue-50 p-4">
+          <p className="font-medium text-blue-900">Re-evaluation Submitted</p>
+          <p className="mt-1 text-sm text-blue-800">
+            Your re-evaluation has been submitted. Your teacher will review it shortly.
+          </p>
+        </div>
+      )}
+
+      {/* Daily tasks */}
       {child.status === "active" && (
         <div className="mt-6 rounded border p-4">
-          <p className="font-medium">Today’s Tasks</p>
-
+          <p className="font-medium">Today&apos;s Tasks</p>
           {todaysTasks.length === 0 ? (
-            <p className="mt-1 text-sm text-gray-700">
-              No tasks posted for today.
-            </p>
+            <p className="mt-1 text-sm text-gray-700">No tasks posted for today.</p>
           ) : (
             <div className="mt-3 space-y-2">
               {todaysTasks.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-center justify-between rounded border p-3"
-                >
+                <div key={t.id} className="flex items-center justify-between rounded border p-3">
                   <div>
                     <p className="font-medium capitalize">{t.skill}</p>
-                    <p className="text-xs text-gray-600">
-                      {t.isCompleted
-                        ? "Completed ✅"
-                        : "Not completed yet"}
-                    </p>
+                    <p className="text-xs text-gray-600">{t.isCompleted ? "Completed ✅" : "Not completed yet"}</p>
                   </div>
-
                   {t.isCompleted ? (
                     <span className="text-sm text-gray-600">Locked</span>
                   ) : (
-                    <Link
-                      className="rounded bg-black px-3 py-1 text-sm text-white"
-                      href={`/student/tasks/${t.id}`}
-                    >
+                    <Link className="rounded bg-black px-3 py-1 text-sm text-white" href={`/student/tasks/${t.id}`}>
                       Start
                     </Link>
                   )}

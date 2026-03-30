@@ -12,8 +12,14 @@ type Artifact = {
   skill: SkillType;
   textBody: string | null;
   fileId: string | null;
+  answersJson: unknown;
   createdAt: string;
 };
+
+// Mirrors the scoring output shape from the submit route
+type McqFillEntry = { questionId: string; studentAnswer: string; isCorrect: boolean; correctAnswer: string };
+type MsaqEntry    = { questionId: string; studentAnswers: string[]; correctAnswers: string[]; score: number; maxScore: number };
+type AnswerEntry  = McqFillEntry | MsaqEntry;
 
 type StudentRow = {
   child: {
@@ -259,12 +265,14 @@ export default function AdminDailyReviewsPage() {
                                 <div key={a.id} className="rounded bg-gray-50 p-2 text-sm">
                                   <p className="font-medium capitalize">{a.skill} artifact</p>
 
+                                  {/* Free-response text submission */}
                                   {a.textBody ? (
                                     <pre className="mt-1 whitespace-pre-wrap text-xs">
                                       {a.textBody}
                                     </pre>
                                   ) : null}
 
+                                  {/* Audio file submission */}
                                   {a.fileId ? (
                                     <div className="mt-1">
                                       <a
@@ -276,6 +284,11 @@ export default function AdminDailyReviewsPage() {
                                         Open / download file
                                       </a>
                                     </div>
+                                  ) : null}
+
+                                  {/* Structured listening submission (mcq/msaq/fill_blank) */}
+                                  {a.answersJson && !a.textBody && !a.fileId ? (
+                                    <AnswersReview entries={a.answersJson as AnswerEntry[]} />
                                   ) : null}
                                 </div>
                               ))}
@@ -292,5 +305,52 @@ export default function AdminDailyReviewsPage() {
         ))}
       </div>
     </main>
+  );
+}
+
+// ── Structured listening answer review (admin view) ───────────────────────
+// Displays scored Q&A from mcq/msaq/fill_blank submissions.
+// Admin sees each question's student answer alongside the correct answer.
+
+function AnswersReview({ entries }: { entries: AnswerEntry[] }) {
+  if (!entries || entries.length === 0) {
+    return <p className="mt-1 text-xs text-gray-500">No answers recorded.</p>;
+  }
+  return (
+    <div className="mt-2 space-y-2">
+      {entries.map((e, i) => {
+        if ("studentAnswers" in e) {
+          // MSAQ entry
+          return (
+            <div key={i} className="rounded border border-gray-200 p-2 text-xs">
+              <p className="font-medium text-gray-700">
+                Q{i + 1} — {e.score}/{e.maxScore} correct
+              </p>
+              <p className="mt-0.5 text-gray-500">
+                Student: {e.studentAnswers.length > 0 ? e.studentAnswers.join(", ") : "—"}
+              </p>
+              <p className="text-green-700">Correct: {e.correctAnswers.join(", ")}</p>
+            </div>
+          );
+        }
+        // MCQ / fill_blank entry
+        return (
+          <div
+            key={i}
+            className={`rounded border p-2 text-xs ${
+              e.isCorrect ? "border-green-200 bg-green-50" : "border-red-200 bg-red-50"
+            }`}
+          >
+            <p className="font-medium text-gray-700">
+              Q{i + 1}: {e.isCorrect ? "✅ Correct" : "❌ Incorrect"}
+            </p>
+            <p className="mt-0.5 text-gray-600">Student: {e.studentAnswer || "—"}</p>
+            {!e.isCorrect && (
+              <p className="text-green-700">Correct: {e.correctAnswer}</p>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }

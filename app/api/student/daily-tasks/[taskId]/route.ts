@@ -2,36 +2,19 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { verifyStudentJwt } from "@/lib/auth";
 
 export const runtime = "nodejs";
 
-type StudentJwtPayload = {
-  childId: string;
-  username: string;
-};
-
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is not set`);
-  return v;
-}
-const SECRET = mustGetEnv("JWT_SECRET");
-
-async function requireStudent(): Promise<StudentJwtPayload | null> {
+async function requireStudent(): Promise<{ childId: string; username: string } | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get("student_token")?.value;
   if (!token) return null;
-
-  const decoded = jwt.verify(token, SECRET);
-  if (typeof decoded !== "object" || decoded === null) return null;
-
-  const payload = decoded as jwt.JwtPayload;
-  const childId = payload.childId;
-  const username = payload.username;
-
-  if (typeof childId !== "string" || typeof username !== "string") return null;
-  return { childId, username };
+  try {
+    return verifyStudentJwt(token);
+  } catch {
+    return null;
+  }
 }
 
 export async function GET(
@@ -58,6 +41,9 @@ export async function GET(
         taskDate: true,
         skill: true,
         level: true,
+        taskFormat: true,
+        writingMinWords: true,
+        writingMaxWords: true,
         contentLinks: {
           select: {
             contentItem: {
@@ -88,9 +74,8 @@ export async function GET(
                 skill: true,
                 textBody: true,
                 fileId: true,
+                answersJson: true,
                 createdAt: true,
-                // keep file select if you want; client ignores extra fields
-                file: { select: { id: true, originalName: true, mimeType: true } },
               },
             },
           },
@@ -99,23 +84,69 @@ export async function GET(
     });
 
     if (!task) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    // Must match level (or task is global)
     if (task.level !== null && child.level !== task.level) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
+    // Access control: students may only access today's task.
+    // A completed (locked) task is always accessible for review regardless of date.
     const submission = task.submissions[0] ?? null;
+    if (!submission?.isCompleted) {
+      const today = new Date();
+      const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const taskDateStr = task.taskDate.toISOString().slice(0, 10);
+      if (taskDateStr !== todayStr) {
+        return NextResponse.json({ error: "This task is not available today." }, { status: 403 });
+      }
+    }
 
-    // ✅ Return EXACT shape the page expects: { task, content, existingSubmission }
+    // Strip correctAnswer fields from question bank before sending to student,
+    // UNLESS the submission is already completed (locked) — then reveal answers.
+    const isLocked = submission?.isCompleted ?? false;
+
+    // Include all content items — including type "questions" (the question bank).
+    // The student page's question useMemo finds the listening item whose textBody is
+    // a JSON questions payload. The display section hides raw JSON blocks from view.
+    // Correct answers are stripped from question bank items when the task is structured
+    // and not yet locked — the student should not see answers until the task is complete.
+    const isStructuredTask = task.taskFormat === "mcq" || task.taskFormat === "msaq" || task.taskFormat === "fill_blank";
+
+    const contentForStudent = task.contentLinks
+      .map((l) => l.contentItem)
+      .map((item) => {
+        if (item.type === "questions" && isStructuredTask && item.textBody && !isLocked) {
+          try {
+            const parsed = JSON.parse(item.textBody) as {
+              questions: Array<Record<string, unknown>>;
+            };
+            const stripped = {
+              questions: parsed.questions.map((q) => {
+                // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                const { correctAnswer, correctAnswers, ...safe } = q as Record<string, unknown>;
+                void correctAnswer;
+                void correctAnswers;
+                return safe;
+              }),
+            };
+            return { ...item, textBody: JSON.stringify(stripped) };
+          } catch {
+            return item;
+          }
+        }
+        return item;
+      });
+
     return NextResponse.json({
       task: {
         id: task.id,
         taskDate: task.taskDate,
         skill: task.skill,
         level: task.level,
+        taskFormat: task.taskFormat,
+        writingMinWords: task.writingMinWords,
+        writingMaxWords: task.writingMaxWords,
       },
-      content: task.contentLinks.map((l) => l.contentItem),
+      content: contentForStudent,
       existingSubmission: submission
         ? {
             isCompleted: submission.isCompleted,
@@ -126,6 +157,7 @@ export async function GET(
               skill: a.skill,
               textBody: a.textBody,
               fileId: a.fileId,
+              answersJson: a.answersJson,
             })),
           }
         : null,

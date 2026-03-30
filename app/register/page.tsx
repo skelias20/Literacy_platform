@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-
+import Link from "next/link";
 type PaymentMethod = "transaction_id" | "receipt_upload";
 
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024; // 5MB
@@ -86,12 +86,10 @@ export default function RegisterPage() {
       };
 
       // Step 2: Upload directly to R2
+      // Content-Type header only — never include Content-Length (causes R2 checksum failures).
       const r2Res = await fetch(presignedUrl, {
         method: "PUT",
-        headers: {
-          "Content-Type": file.type,
-          "Content-Length": String(file.size),
-        },
+        headers: { "Content-Type": file.type },
         body: file,
       });
       if (!r2Res.ok) {
@@ -395,6 +393,7 @@ export default function RegisterPage() {
           {loading ? "Submitting..." : "Submit Registration"}
         </button>
       </form>
+      <center><Link className="underline" href="/student/login">Login</Link></center>
     </main>
   );
 }

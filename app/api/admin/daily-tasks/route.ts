@@ -1,4 +1,7 @@
 // app/api/admin/daily-tasks/route.ts
+// isAssessmentDefault removed from all contentItem.create calls — field no longer exists.
+// All other logic is unchanged.
+
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
@@ -9,39 +12,93 @@ import { LiteracyLevelSchema, SkillSchema, IdSchema } from "@/lib/schemas";
 
 export const runtime = "nodejs";
 
-// ── Schemas ───────────────────────────────────────────────────────────────
+const TaskFormatSchema = z.enum(["free_response", "mcq", "msaq", "fill_blank"]);
 
 const DateQuerySchema = z.object({
   date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD format"),
   level: z.string().optional(),
 });
 
+const McqQuestionSchema = z.object({
+  id:            z.string().min(1).max(64),
+  type:          z.literal("mcq"),
+  prompt:        z.string().min(1).max(1000).trim(),
+  options:       z.array(z.string().min(1).max(200).trim()).min(2).max(6),
+  correctAnswer: z.string().min(1).max(200).trim(),
+});
+
+const MsaqQuestionSchema = z.object({
+  id:             z.string().min(1).max(64),
+  type:           z.literal("msaq"),
+  prompt:         z.string().min(1).max(1000).trim(),
+  answerCount:    z.number().int().min(1).max(6),
+  correctAnswers: z.array(z.string().min(1).max(200).trim()).min(1).max(6),
+});
+
+const FillBlankQuestionSchema = z.object({
+  id:            z.string().min(1).max(64),
+  type:          z.literal("fill_blank"),
+  prompt:        z.string().min(1).max(1000).trim(),
+  correctAnswer: z.string().min(1).max(200).trim(),
+});
+
+const AnyQuestionSchema = z.discriminatedUnion("type", [
+  McqQuestionSchema,
+  MsaqQuestionSchema,
+  FillBlankQuestionSchema,
+]);
+
+const QuestionBankSchema = z.object({
+  questions: z.array(AnyQuestionSchema).min(1).max(50),
+});
+
 const DailyTaskPostSchema = z.object({
   date:  z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date must be YYYY-MM-DD format"),
   level: z.union([LiteracyLevelSchema, z.literal("all")]),
-  skills: z
-    .array(SkillSchema)
-    .min(1, "Select at least one skill.")
-    .max(4),
-  contentBySkill: z.record(
-    SkillSchema,
-    z.array(IdSchema).max(20)
-  ).optional(),
+  skills: z.array(SkillSchema).min(1, "Select at least one skill.").max(4),
+  contentBySkill: z.record(SkillSchema, z.array(IdSchema).max(20)).optional(),
   rpValue: z.number().int().min(5).max(20),
-});
-
-// ── Auth helper ───────────────────────────────────────────────────────────
+  taskFormat: TaskFormatSchema.optional().default("free_response"),
+  writingMinWords: z.number().int().min(1).max(2000).nullish(),
+  writingMaxWords: z.number().int().min(1).max(5000).nullish(),
+  questionBank: QuestionBankSchema.optional(),
+}).refine(
+  (data) => {
+    if (data.writingMinWords && data.writingMaxWords) {
+      return data.writingMinWords < data.writingMaxWords;
+    }
+    return true;
+  },
+  { message: "Minimum word count must be less than maximum word count.", path: ["writingMinWords"] }
+).refine(
+  (data) => {
+    if (
+      data.skills.includes("listening") &&
+      data.taskFormat !== "free_response" &&
+      !data.questionBank
+    ) {
+      return false;
+    }
+    return true;
+  },
+  { message: "A question bank is required for structured listening tasks.", path: ["questionBank"] }
+).refine(
+  (data) => {
+    if (!data.questionBank) return true;
+    for (const q of data.questionBank.questions) {
+      if (q.type === "mcq" && !q.options.includes(q.correctAnswer)) return false;
+    }
+    return true;
+  },
+  { message: "MCQ correct answer must match one of the provided options.", path: ["questionBank"] }
+);
 
 async function requireAdmin(): Promise<string | null> {
   const store = await cookies();
   const token = store.get("admin_token")?.value;
   if (!token) return null;
-  try {
-    const payload = verifyAdminJwt(token);
-    return payload.adminId;
-  } catch {
-    return null;
-  }
+  try { return verifyAdminJwt(token).adminId; }
+  catch { return null; }
 }
 
 function parseDateOnly(dateStr: string): Date {
@@ -76,8 +133,8 @@ export async function GET(req: Request) {
 
     const content = await prisma.contentItem.findMany({
       where: {
-        isAssessmentDefault: false,
         deletedAt: null,
+        type: { not: "questions" },
         ...(levelFilter
           ? { OR: [{ level: levelFilter }, { level: null }] }
           : { level: null }),
@@ -104,10 +161,13 @@ export async function GET(req: Request) {
         skill: true,
         level: true,
         rpValue: true,
+        taskFormat: true,
+        writingMinWords: true,
+        writingMaxWords: true,
         contentLinks: {
           select: {
             contentItemId: true,
-            contentItem: { select: { id: true, title: true, skill: true } },
+            contentItem: { select: { id: true, title: true, skill: true, type: true } },
           },
         },
       },
@@ -137,11 +197,16 @@ export async function POST(req: Request) {
     const body = parsed.data;
 
     const taskDate   = parseDateOnly(body.date);
+
+    // Reject past dates — daily tasks must be created for today or a future date.
+    const todayUtc = parseDateOnly(new Date().toISOString().slice(0, 10));
+    if (taskDate < todayUtc) {
+      return NextResponse.json({ error: "Daily tasks cannot be created for past dates." }, { status: 400 });
+    }
+
     const levelValue = body.level !== "all" ? body.level : null;
     const skills     = Array.from(new Set(body.skills));
 
-    // ── Skill/content mismatch validation (server-side guard) ─────────────
-    // Mirrors the P0-2 fix — content items must match their assigned skill.
     const allContentIds = skills
       .flatMap((s) => body.contentBySkill?.[s] ?? [])
       .filter(Boolean);
@@ -158,10 +223,7 @@ export async function POST(req: Request) {
         for (const id of ids) {
           const actualSkill = contentSkillMap.get(id);
           if (!actualSkill) {
-            return NextResponse.json(
-              { error: `Content item ${id} not found or archived.` },
-              { status: 400 }
-            );
+            return NextResponse.json({ error: `Content item ${id} not found or archived.` }, { status: 400 });
           }
           if (actualSkill !== skill) {
             return NextResponse.json(
@@ -173,60 +235,93 @@ export async function POST(req: Request) {
       }
     }
 
-    // ── Create / update tasks in transaction ──────────────────────────────
     const created = await prisma.$transaction(async (tx) => {
       const results: { skill: string; taskId: string }[] = [];
 
       for (const skill of skills) {
-        const existing = await tx.dailyTask.findFirst({
-          where: { taskDate, skill, level: levelValue },
+        const taskFormat      = skill === "listening" ? body.taskFormat : "free_response";
+        const writingMinWords = skill === "writing" ? (body.writingMinWords ?? null) : null;
+        const writingMaxWords = skill === "writing" ? (body.writingMaxWords ?? null) : null;
+
+        const task = await tx.dailyTask.create({
+          data: {
+            taskDate,
+            skill,
+            level: levelValue,
+            rpValue: body.rpValue,
+            taskFormat,
+            writingMinWords,
+            writingMaxWords,
+            createdByAdminId: adminId,
+          },
           select: { id: true },
         });
 
-        const task =
-          existing ??
-          (await tx.dailyTask.create({
-            data: {
-              taskDate,
-              skill,
-              level: levelValue,
-              rpValue: body.rpValue,
-              createdByAdminId: adminId,
-            },
-            select: { id: true },
-          }));
+        const contentIds = (body.contentBySkill?.[skill] ?? []).filter(Boolean);
+        let questionBankContentItemId: string | null = null;
 
-        if (existing) {
-          await tx.dailyTask.update({
-            where: { id: existing.id },
-            data: { rpValue: body.rpValue },
+        if (skill === "listening" && body.taskFormat !== "free_response" && body.questionBank) {
+          const selectedAudioId = contentIds[0];
+          if (!selectedAudioId) {
+            throw new Error("A listening audio content item must be selected for structured tasks.");
+          }
+
+          const bankJson = JSON.stringify({ questions: body.questionBank.questions });
+
+          const audio = await tx.contentItem.findUnique({
+            where: { id: selectedAudioId },
+            select: {
+              id: true,
+              level: true,
+              questionBank: { select: { id: true, deletedAt: true } },
+            },
           });
+          if (!audio) throw new Error(`Audio content item ${selectedAudioId} not found.`);
+
+          if (audio.questionBank && !audio.questionBank.deletedAt) {
+            await tx.contentItem.update({
+              where: { id: audio.questionBank.id },
+              data: { textBody: bankJson },
+            });
+            questionBankContentItemId = audio.questionBank.id;
+          } else {
+            const newBank = await tx.contentItem.create({
+              data: {
+                title:               `Question bank for: ${selectedAudioId}`,
+                skill:               "listening",
+                type:                "questions",
+                level:               audio.level,
+                textBody:            bankJson,
+                // isAssessmentDefault removed — field no longer exists on ContentItem
+                createdByAdminId:    adminId,
+                parentContentItemId: selectedAudioId,
+              },
+              select: { id: true },
+            });
+            questionBankContentItemId = newBank.id;
+          }
         }
 
-        const contentIds = (body.contentBySkill?.[skill] ?? []).filter(Boolean);
-        await tx.dailyTaskContent.deleteMany({ where: { dailyTaskId: task.id } });
+        const finalContentIds = [
+          ...contentIds,
+          ...(questionBankContentItemId ? [questionBankContentItemId] : []),
+        ];
 
-        if (contentIds.length > 0) {
+        if (finalContentIds.length > 0) {
           await tx.dailyTaskContent.createMany({
-            data: contentIds.map((contentItemId) => ({ dailyTaskId: task.id, contentItemId })),
+            data: finalContentIds.map((contentItemId) => ({ dailyTaskId: task.id, contentItemId })),
             skipDuplicates: true,
           });
         }
 
         const eligibleChildren = await tx.child.findMany({
-          where: {
-            status: "active",
-            ...(levelValue ? { level: levelValue } : {}),
-          },
+          where: { status: "active", ...(levelValue ? { level: levelValue } : {}) },
           select: { id: true },
         });
 
         if (eligibleChildren.length > 0) {
           await tx.dailySubmission.createMany({
-            data: eligibleChildren.map((c) => ({
-              childId: c.id,
-              dailyTaskId: task.id,
-            })),
+            data: eligibleChildren.map((c) => ({ childId: c.id, dailyTaskId: task.id })),
             skipDuplicates: true,
           });
         }

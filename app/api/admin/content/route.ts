@@ -4,16 +4,12 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
 import { verifyAdminJwt } from "@/lib/auth";
-import { deleteR2Object } from "@/lib/r2";
 import { rateLimit, getClientIp, RATE_LIMITS } from "@/lib/rateLimit";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, SkillSchema, IdSchema } from "@/lib/schemas";
 
 export const runtime = "nodejs";
 
-// ── Shared skill/type constraint map ─────────────────────────────────────
-// Mirrors SKILL_CONTENT_TYPES in the frontend content page.
-// "questions" and "passage_text" excluded until task polymorphism is built.
 const SKILL_ALLOWED_TYPES: Record<string, string[]> = {
   reading:   ["pdf_document"],
   listening: ["passage_audio"],
@@ -47,18 +43,12 @@ const ContentDeleteSchema = z.object({
   force: z.boolean().optional().default(false),
 });
 
-// ── Auth helper ───────────────────────────────────────────────────────────
-
 async function requireAdmin(): Promise<string | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get("admin_token")?.value;
   if (!token) return null;
-  try {
-    const payload = verifyAdminJwt(token);
-    return payload.adminId;
-  } catch {
-    return null;
-  }
+  try { return verifyAdminJwt(token).adminId; }
+  catch { return null; }
 }
 
 // ── GET ───────────────────────────────────────────────────────────────────
@@ -72,7 +62,6 @@ export async function GET(req: Request) {
   const level          = searchParams.get("level") ?? undefined;
   const includeDeleted = searchParams.get("includeDeleted") === "true";
 
-  // Validate skill and level query params if present
   const skillResult = skill ? SkillSchema.safeParse(skill) : null;
   if (skillResult && !skillResult.success) {
     return NextResponse.json({ error: "Invalid skill filter." }, { status: 400 });
@@ -87,6 +76,8 @@ export async function GET(req: Request) {
       ...(skillResult?.success ? { skill: skillResult.data } : {}),
       ...(levelResult?.success ? { level: levelResult.data } : {}),
       ...(includeDeleted ? {} : { deletedAt: null }),
+      // Never expose question bank items directly in the content library list
+      type: { not: "questions" },
     },
     select: {
       id: true,
@@ -98,7 +89,6 @@ export async function GET(req: Request) {
       textBody: true,
       assetUrl: true,
       mimeType: true,
-      isAssessmentDefault: true,
       deletedAt: true,
       createdAt: true,
       file: {
@@ -111,11 +101,15 @@ export async function GET(req: Request) {
           uploadStatus: true,
         },
       },
+      // Include assessment slot assignments so the content library can show badges
+      assessmentDefaultSlots: {
+        select: { level: true, skill: true, sessionNumber: true },
+        orderBy: [{ level: "asc" }, { sessionNumber: "asc" }],
+      },
     },
     orderBy: [{ skill: "asc" }, { createdAt: "desc" }],
   });
 
-  // BigInt serialization — must convert before JSON response
   const items = rawItems.map((item) => ({
     ...item,
     file: item.file
@@ -147,7 +141,6 @@ export async function POST(req: Request) {
     if (!parsed.ok) return parsed.response;
     const body = parsed.data;
 
-    // ── Skill/type constraint validation ──────────────────────────────────
     const allowedTypes = SKILL_ALLOWED_TYPES[body.skill];
     if (!allowedTypes?.includes(body.type)) {
       return NextResponse.json(
@@ -162,15 +155,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // ── File existence + completion check ─────────────────────────────────
     if (body.fileId) {
       const file = await prisma.file.findUnique({
         where: { id: body.fileId },
         select: { id: true, uploadStatus: true },
       });
-      if (!file) {
-        return NextResponse.json({ error: "File not found." }, { status: 404 });
-      }
+      if (!file) return NextResponse.json({ error: "File not found." }, { status: 404 });
       if (file.uploadStatus !== "COMPLETED") {
         return NextResponse.json(
           { error: "File upload is still processing. Please wait and try again." },
@@ -184,15 +174,15 @@ export async function POST(req: Request) {
 
     const item = await prisma.contentItem.create({
       data: {
-        title:           body.title,
-        description:     body.description?.trim() || null,
-        skill:           body.skill as never,
-        level:           levelValue as never,
-        type:            body.type as never,
-        textBody:        body.textBody?.trim() || null,
-        fileId:          body.fileId || null,
+        title:            body.title,
+        description:      body.description?.trim() || null,
+        skill:            body.skill as never,
+        level:            levelValue as never,
+        type:             body.type as never,
+        textBody:         body.textBody?.trim() || null,
+        fileId:           body.fileId || null,
         assetUrl,
-        mimeType:        body.mimeType || null,
+        mimeType:         body.mimeType || null,
         createdByAdminId: adminId,
       },
     });
@@ -224,15 +214,13 @@ export async function PATCH(req: Request) {
       select: { id: true, deletedAt: true },
     });
     if (!item) return NextResponse.json({ error: "Not found." }, { status: 404 });
-    if (item.deletedAt) {
-      return NextResponse.json({ error: "Cannot edit an archived item." }, { status: 400 });
-    }
+    if (item.deletedAt) return NextResponse.json({ error: "Cannot edit an archived item." }, { status: 400 });
 
     const updated = await prisma.contentItem.update({
       where: { id },
       data: {
-        ...(title              ? { title }                                         : {}),
-        ...(description !== undefined ? { description: description || null }       : {}),
+        ...(title !== undefined              ? { title }                                   : {}),
+        ...(description !== undefined        ? { description: description || null }         : {}),
         ...(level !== undefined
           ? { level: level && level !== "all" ? (level as never) : null }
           : {}),
@@ -274,12 +262,26 @@ export async function DELETE(req: Request) {
             dailyTask: { select: { id: true, taskDate: true, skill: true } },
           },
         },
+        // Also check if this item is used in assessment slots
+        assessmentDefaultSlots: {
+          select: { level: true, skill: true, sessionNumber: true },
+        },
       },
     });
 
     if (!item) return NextResponse.json({ error: "Not found." }, { status: 404 });
-    if (item.deletedAt) {
-      return NextResponse.json({ error: "Already archived." }, { status: 400 });
+    if (item.deletedAt) return NextResponse.json({ error: "Already archived." }, { status: 400 });
+
+    // Block archiving if the item is assigned to any assessment slot
+    if (item.assessmentDefaultSlots.length > 0 && !force) {
+      return NextResponse.json(
+        {
+          warning: true,
+          message: `This content is assigned to ${item.assessmentDefaultSlots.length} assessment slot(s). Remove it from the assessment configuration first, or pass force: true to archive anyway.`,
+          assessmentSlots: item.assessmentDefaultSlots,
+        },
+        { status: 200 }
+      );
     }
 
     const today = new Date();
@@ -293,7 +295,7 @@ export async function DELETE(req: Request) {
       return NextResponse.json(
         {
           warning: true,
-          message: `This content is linked to ${futureTasks.length} upcoming task(s). Students will see it as unavailable. Pass force: true to confirm.`,
+          message: `This content is linked to ${futureTasks.length} upcoming task(s). Pass force: true to confirm.`,
           affectedTasks: futureTasks.map((l) => ({
             taskId:   l.dailyTask.id,
             taskDate: l.dailyTask.taskDate,
@@ -304,11 +306,14 @@ export async function DELETE(req: Request) {
       );
     }
 
-    // Soft delete only — never hard delete, file may be in student submissions
     await prisma.contentItem.update({
       where: { id },
       data: { deletedAt: new Date() },
     });
+
+    // R2 object deletion is NOT done synchronously on archive.
+    // The Cloudflare Worker orphan-sweep cron handles cleanup by reading File.deletedAt.
+    // Setting deletedAt above is sufficient for the sweep to pick it up.
 
     return NextResponse.json({ ok: true });
   } catch (e: unknown) {

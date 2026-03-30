@@ -23,12 +23,13 @@ export async function GET(
 
     const payload = verifyStudentJwt(token);
 
-    // Verify student is active
+    // Verify student is active or in the initial assessment phase.
+    // assessment_required students need to access content during their initial assessment.
     const child = await prisma.child.findUnique({
       where: { id: payload.childId },
       select: { status: true },
     });
-    if (!child || child.status !== "active") {
+    if (!child || (child.status !== "active" && child.status !== "assessment_required")) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

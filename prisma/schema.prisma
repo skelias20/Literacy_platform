@@ -1,20 +1,6 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
-//generator client {
-//  provider = "prisma-client"
-//  output   = "../app/generated/prisma"
-//}
-
-//datasource db {
-//  provider = "postgresql"
-//}
-// schema.prisma
-// Demo-safe Prisma schema for the Admin-Controlled Literacy Platform
-// PostgreSQL + Prisma Client
+// prisma/schema.prisma
+// CHANGES FROM 01_schema.prisma:
+// - Removed taskFormat from AssessmentConfig (derived from question bank at runtime instead)
 
 generator client {
   provider = "prisma-client-js"
@@ -25,9 +11,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-//
-// ---------- ENUMS (Prisma -> TS types generated automatically) ----------
-//
 enum AccountStatus {
   pending_payment
   approved_pending_login
@@ -85,18 +68,23 @@ enum AuditAction {
   DAILY_SKILL_FOCUS_SET
   CONTENT_CREATED
   CONTENT_ASSIGNED
-  STUDENT_PROFILE_EDITED  
+  STUDENT_PROFILE_EDITED
+  PERIODIC_TRIGGERED
 }
 
 enum UploadStatus {
-  PENDING    // presigned URL issued, upload not yet confirmed
-  COMPLETED  // R2 confirmed file arrived, artifact linked
-  FAILED     // upload failed or timed out
+  PENDING
+  COMPLETED
+  FAILED
 }
 
-//
-// ---------- ADMINS ----------
-//
+enum TaskFormat {
+  free_response
+  mcq
+  msaq
+  fill_blank
+}
+
 model Admin {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -106,22 +94,19 @@ model Admin {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  // Relations
-  createdContent    ContentItem[]
-  createdDailyTasks DailyTask[]
-  uploadedFiles     File[]
-  auditLogs         AdminAuditLog[]
-
+  createdContent                ContentItem[]
+  createdDailyTasks             DailyTask[]
+  uploadedFiles                 File[]
+  auditLogs                     AdminAuditLog[]
   credentialsCreatedForChildren Child[]      @relation("CredentialsCreatedByAdmin")
   levelAssignedForChildren      Child[]      @relation("LevelAssignedByAdmin")
   reviewedPayments              Payment[]    @relation("PaymentReviewedByAdmin")
   reviewedAssessments           Assessment[] @relation("AssessmentReviewedByAdmin")
+  triggeredAssessments          Assessment[] @relation("AssessmentTriggeredByAdmin")
+  assessmentConfigs             AssessmentConfig[]
+  assessmentDefaultsCreated     AssessmentDefaultContent[] @relation("AssessmentDefaultsCreatedBy")
 }
 
-//
-// ---------- PARENTS ----------
-// Parent identity is (email + phone).
-//
 model Parent {
   id        String   @id @default(uuid())
   firstName String
@@ -138,9 +123,6 @@ model Parent {
   @@index([phone])
 }
 
-//
-// ---------- CHILDREN ----------
-//
 model Child {
   id       String @id @default(uuid())
   parentId String
@@ -150,36 +132,28 @@ model Child {
   childLastName  String
   grade          Int
   dateOfBirth    DateTime
-  subjects       String[]  // Optional favourite subjects
+  subjects       String[]
 
-  // Admin-assigned credentials (nullable until created)
   username     String? @unique
   passwordHash String?
-
-  
 
   credentialsCreatedById String?
   credentialsCreatedBy   Admin?    @relation("CredentialsCreatedByAdmin", fields: [credentialsCreatedById], references: [id], onDelete: SetNull)
   credentialsCreatedAt   DateTime?
 
-  // State machine
   status AccountStatus @default(pending_payment)
 
-  // Level assigned after assessment review
   level             LiteracyLevel?
   levelAssignedById String?
   levelAssignedBy   Admin?         @relation("LevelAssignedByAdmin", fields: [levelAssignedById], references: [id], onDelete: SetNull)
   levelAssignedAt   DateTime?
 
-  // For "inactive 24h" admin list (cache for fast queries)
   lastDailySubmissionAt DateTime?
   archivedAt            DateTime?
-
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // Relations
   payment           Payment?
   assessments       Assessment[]
   dailySubmissions  DailySubmission[]
@@ -194,29 +168,21 @@ model Child {
   @@index([archivedAt])
 }
 
-//
-// ---------- FILES ----------
-// Used for: receipt uploads (optional), user submissions, and optional admin uploads.
-// Assessment default content can be external URLs (assetUrl on ContentItem) to avoid file infra.
-//
 model File {
   id           String       @id @default(uuid())
-  storageKey   String       // local disk path (legacy) or R2 object key
-  r2Key        String?      // explicit R2 object key (used for presigned URL generation)
-  storageUrl   String?      // public R2 URL for serving content
+  storageKey   String
+  r2Key        String?
+  storageUrl   String?
   originalName String
   mimeType     String
   byteSize     BigInt
   sha256       String?
 
-  // Upload lifecycle
   uploadStatus  UploadStatus @default(PENDING)
-  failureReason String?      // populated if uploadStatus = FAILED
+  failureReason String?
 
-  // Soft delete — never hard-delete files that may be referenced
   deletedAt DateTime?
-
-  createdAt DateTime @default(now())
+  createdAt DateTime  @default(now())
 
   uploadedByAdminId String?
   uploadedByAdmin   Admin?  @relation(fields: [uploadedByAdminId], references: [id], onDelete: SetNull)
@@ -224,7 +190,6 @@ model File {
   uploadedByChildId String?
   uploadedByChild   Child?  @relation("FilesUploadedByChild", fields: [uploadedByChildId], references: [id], onDelete: SetNull)
 
-  // Relations
   paymentReceiptFor   Payment?                  @relation("PaymentReceiptFile")
   contentItems        ContentItem[]
   assessmentArtifacts AssessmentArtifact[]
@@ -236,9 +201,6 @@ model File {
   @@index([deletedAt])
 }
 
-//
-// ---------- PAYMENTS ----------
-//
 model Payment {
   id      String @id @default(uuid())
   childId String @unique
@@ -247,7 +209,6 @@ model Payment {
   method PaymentMethod
   status PaymentStatus @default(pending)
 
-  // Exactly one should be present depending on method (enforce via API validation)
   transactionId String?
   receiptFileId String? @unique
   receiptFile   File?   @relation("PaymentReceiptFile", fields: [receiptFileId], references: [id], onDelete: SetNull)
@@ -255,22 +216,12 @@ model Payment {
   reviewedByAdminId String?
   reviewedByAdmin   Admin?    @relation("PaymentReviewedByAdmin", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
   reviewedAt        DateTime?
-  reviewNote        String?
-
   createdAt DateTime @default(now())
-
   auditLogsTargeted AdminAuditLog[] @relation("AuditTargetPayment")
 
   @@index([status])
 }
 
-//
-// ---------- CONTENT LIBRARY ----------
-// Supports three payload modes:
-// 1) textBody (for prompts/passages/questions)
-// 2) fileId (for admin-uploaded assets stored by platform)
-// 3) assetUrl (for externally hosted assets like cloud PDFs)
-//
 model ContentItem {
   id          String         @id @default(uuid())
   title       String
@@ -279,42 +230,60 @@ model ContentItem {
   level       LiteracyLevel?
   type        ContentType
 
-  // Payload options (enforce rules in API validation)
   textBody String?
 
   fileId String?
   file   File?   @relation(fields: [fileId], references: [id], onDelete: SetNull)
 
-  assetUrl String? // e.g., cloud PDF URL (assessment defaults)
-  mimeType String? // e.g., application/pdf, audio/mpeg
+  assetUrl String?
+  mimeType String?
 
-  // Marks content as part of the default initial assessment package
-  isAssessmentDefault Boolean @default(false)
+  parentContentItemId String?      @unique
+  parentContentItem   ContentItem? @relation("ContentItemQuestionBank", fields: [parentContentItemId], references: [id], onDelete: SetNull)
+  questionBank        ContentItem? @relation("ContentItemQuestionBank")
 
   createdByAdminId String
   createdByAdmin   Admin    @relation(fields: [createdByAdminId], references: [id], onDelete: Restrict)
   createdAt        DateTime @default(now())
-  deletedAt        DateTime? // soft delete — null means active
+  deletedAt        DateTime?
 
-  auditLogsTargeted AdminAuditLog[] @relation("AuditTargetContent")
-
-  dailyTaskLinks DailyTaskContent[]
+  auditLogsTargeted      AdminAuditLog[]           @relation("AuditTargetContent")
+  dailyTaskLinks         DailyTaskContent[]
+  assessmentDefaultSlots AssessmentDefaultContent[] @relation("AssessmentDefaultSlots")
+  assessmentArtifacts    AssessmentArtifact[]      @relation("ArtifactSourceContent")
 
   @@index([skill, level])
-  @@index([isAssessmentDefault])
   @@index([deletedAt])
+  @@index([parentContentItemId])
 }
 
-//
-// ---------- DAILY TASKS ----------
-//
+model AssessmentDefaultContent {
+  id            String        @id @default(uuid())
+  level         LiteracyLevel
+  skill         SkillType
+  sessionNumber Int
+
+  contentItemId    String
+  contentItem      ContentItem @relation("AssessmentDefaultSlots", fields: [contentItemId], references: [id], onDelete: Restrict)
+
+  createdByAdminId String
+  createdByAdmin   Admin       @relation("AssessmentDefaultsCreatedBy", fields: [createdByAdminId], references: [id], onDelete: Restrict)
+  createdAt        DateTime    @default(now())
+
+  @@unique([level, skill, sessionNumber])
+  @@index([level, skill])
+}
+
 model DailyTask {
   id       String         @id @default(uuid())
-  taskDate DateTime // treat as date in your app layer (normalize)
+  taskDate DateTime
   skill    SkillType
-  level    LiteracyLevel? // NULL means "applies to all levels"
+  level    LiteracyLevel?
 
-  rpValue          Int            @default(10) // admin-configurable 5–20
+  rpValue         Int        @default(10)
+  taskFormat      TaskFormat @default(free_response)
+  writingMinWords Int?
+  writingMaxWords Int?
 
   createdByAdminId String
   createdByAdmin   Admin    @relation(fields: [createdByAdminId], references: [id], onDelete: Restrict)
@@ -340,9 +309,6 @@ model DailyTaskContent {
   @@id([dailyTaskId, contentItemId])
 }
 
-//
-// ---------- DAILY SUBMISSIONS ----------
-//
 model DailySubmission {
   id          String @id @default(uuid())
   childId     String
@@ -373,10 +339,10 @@ model DailySubmissionArtifact {
 
   skill SkillType
 
-  // Either textBody or fileId (enforce via API validation)
-  textBody String?
-  fileId   String?
-  file     File?   @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  textBody    String?
+  fileId      String?
+  file        File?   @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  answersJson Json?
 
   createdAt DateTime @default(now())
 
@@ -384,15 +350,28 @@ model DailySubmissionArtifact {
   @@index([skill])
 }
 
-//
-// ---------- ASSESSMENTS ----------
-//
 model Assessment {
   id      String @id @default(uuid())
   childId String
   child   Child  @relation(fields: [childId], references: [id], onDelete: Cascade)
 
   kind AssessmentKind @default(initial)
+
+  sessionNumber Int     @default(1)
+  isLatest      Boolean @default(true)
+
+  // taskFormat is derived at creation time from the listening slot's question bank.
+  // free_response = no question bank attached to the listening content for this session.
+  taskFormat TaskFormat @default(free_response)
+
+  // Snapshot of the literacy level used for slot lookup when this assessment was created.
+  // Initial assessments: gradeToLevel(child.grade) at creation time.
+  // Periodic assessments: child.level at creation time.
+  // Null for rows created before this field was added — those rows fall back to "foundational".
+  lookupLevel LiteracyLevel?
+
+  triggeredByAdminId String?
+  triggeredByAdmin   Admin?  @relation("AssessmentTriggeredByAdmin", fields: [triggeredByAdminId], references: [id], onDelete: SetNull)
 
   startedAt   DateTime?
   submittedAt DateTime?
@@ -403,12 +382,11 @@ model Assessment {
 
   assignedLevel LiteracyLevel?
 
-  auditLogsTargeted AdminAuditLog[] @relation("AuditTargetAssessment")
+  auditLogsTargeted AdminAuditLog[]    @relation("AuditTargetAssessment")
+  artifacts         AssessmentArtifact[]
 
-  artifacts AssessmentArtifact[]
-
-  @@unique([childId, kind])
   @@index([childId])
+  @@index([childId, kind, isLatest])
 }
 
 model AssessmentArtifact {
@@ -418,10 +396,16 @@ model AssessmentArtifact {
 
   skill SkillType
 
-  // Either textBody or fileId (enforce via API validation)
-  textBody String?
-  fileId   String?
-  file     File?   @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  textBody    String?
+  fileId      String?
+  file        File?   @relation(fields: [fileId], references: [id], onDelete: SetNull)
+  answersJson Json?
+
+  // The content item the student was responding to when this artifact was submitted.
+  // Enables admin reviewers to see exactly which content was shown to the student.
+  // Null for artifacts created before this field was added, or for skills without a content slot.
+  contentItemId String?
+  contentItem   ContentItem? @relation("ArtifactSourceContent", fields: [contentItemId], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
@@ -429,9 +413,6 @@ model AssessmentArtifact {
   @@index([skill])
 }
 
-//
-// ---------- RP EVENTS (ledger) ----------
-//
 model RpEvent {
   id      String @id @default(uuid())
   childId String
@@ -447,9 +428,18 @@ model RpEvent {
   @@index([childId])
 }
 
-//
-// ---------- ADMIN AUDIT LOG ----------
-//
+// Single-row table — always upsert, never insert a second row.
+// taskFormat removed — derived from listening slot question bank at assessment creation time.
+// periodicSessionCount removed — admin controls periodic frequency via trigger button.
+model AssessmentConfig {
+  id                  String   @id @default(uuid())
+  initialSessionCount Int      @default(1)
+  updatedByAdminId    String
+  updatedByAdmin      Admin    @relation(fields: [updatedByAdminId], references: [id], onDelete: Restrict)
+  updatedAt           DateTime @updatedAt
+  createdAt           DateTime @default(now())
+}
+
 model AdminAuditLog {
   id      String @id @default(uuid())
   adminId String
@@ -471,7 +461,7 @@ model AdminAuditLog {
 
   metadata  Json     @default("{}")
   createdAt DateTime @default(now())
-
+  
   @@index([adminId])
   @@index([targetChildId])
   @@index([createdAt])

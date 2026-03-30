@@ -39,5 +39,6 @@ uploads/
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-
+#Hook file
+/.claude/hooks/CHANGED_FILES.tmp
 /app/generated/prisma

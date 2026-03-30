@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-
+import Link from "next/link";
 export default function StudentLoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -76,6 +76,9 @@ export default function StudentLoginPage() {
           >
             {loading ? "Signing in..." : "Sign in"}
           </button>
+          <Link className="underline" href="/register">
+ Register
+</Link>
         </form>
       </div>
     </main>

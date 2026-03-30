@@ -7,27 +7,29 @@ import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, IdSchema } from "@/lib/schemas";
 
+export const runtime = "nodejs";
+
 const AssignLevelSchema = z.object({
   assessmentId: IdSchema,
   level: LiteracyLevelSchema,
 });
 
+async function requireAdmin(): Promise<string | null> {
+  const cookieStore = await cookies();
+  const token = cookieStore.get("admin_token")?.value;
+  if (!token) return null;
+  try {
+    return verifyAdminJwt(token).adminId;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: Request) {
   try {
-    // ── Auth — use canonical verifier, not inline jwt.verify ─────────────
-    const cookieStore = await cookies();
-    const token = cookieStore.get("admin_token")?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const adminId = await requireAdmin();
+    if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    let adminId: string;
-    try {
-      const payload = verifyAdminJwt(token);
-      adminId = payload.adminId;
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    // ── Parse + validate input ────────────────────────────────────────────
     const parsed = parseBody(
       AssignLevelSchema,
       await req.json().catch(() => null),
@@ -36,10 +38,16 @@ export async function POST(req: Request) {
     if (!parsed.ok) return parsed.response;
     const { assessmentId, level } = parsed.data;
 
-    // ── Business logic checks ─────────────────────────────────────────────
     const assessment = await prisma.assessment.findUnique({
       where: { id: assessmentId },
-      select: { id: true, childId: true, submittedAt: true, assignedLevel: true },
+      select: {
+        id: true,
+        childId: true,
+        kind: true,
+        submittedAt: true,
+        assignedLevel: true,
+        sessionNumber: true,
+      },
     });
 
     if (!assessment) {
@@ -52,7 +60,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Level already assigned" }, { status: 409 });
     }
 
-    // ── Atomic update ─────────────────────────────────────────────────────
     await prisma.$transaction(async (tx) => {
       await tx.assessment.update({
         where: { id: assessmentId },
@@ -63,23 +70,30 @@ export async function POST(req: Request) {
         },
       });
 
+      // Always update the child's level — applies to both initial and periodic assessments.
+      // For initial: also transition status to active.
+      // For periodic: student is already active, just update the level.
       await tx.child.update({
         where: { id: assessment.childId },
         data: {
           level,
-          status: "active",
           levelAssignedById: adminId,
           levelAssignedAt: new Date(),
+          ...(assessment.kind === "initial" ? { status: "active" } : {}),
         },
       });
 
       await tx.adminAuditLog.create({
         data: {
           adminId,
-          action: "LEVEL_ASSIGNED",
+          action: assessment.kind === "initial" ? "LEVEL_ASSIGNED" : "LEVEL_CHANGED",
           targetAssessmentId: assessmentId,
           targetChildId: assessment.childId,
-          metadata: { level },
+          metadata: {
+            level,
+            kind: assessment.kind,
+            sessionNumber: assessment.sessionNumber,
+          },
         },
       });
     });
