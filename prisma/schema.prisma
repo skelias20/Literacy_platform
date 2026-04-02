@@ -70,6 +70,15 @@ enum AuditAction {
   CONTENT_ASSIGNED
   STUDENT_PROFILE_EDITED
   PERIODIC_TRIGGERED
+  PROFILE_CHANGE_REQUESTED
+  PROFILE_CHANGE_APPROVED
+  PROFILE_CHANGE_REJECTED
+}
+
+enum ProfileChangeRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
 }
 
 enum UploadStatus {
@@ -104,13 +113,14 @@ model Admin {
   createdDailyTasks             DailyTask[]
   uploadedFiles                 File[]
   auditLogs                     AdminAuditLog[]
-  credentialsCreatedForChildren Child[]      @relation("CredentialsCreatedByAdmin")
-  levelAssignedForChildren      Child[]      @relation("LevelAssignedByAdmin")
-  reviewedPayments              Payment[]    @relation("PaymentReviewedByAdmin")
-  reviewedAssessments           Assessment[] @relation("AssessmentReviewedByAdmin")
-  triggeredAssessments          Assessment[] @relation("AssessmentTriggeredByAdmin")
+  credentialsCreatedForChildren Child[]                    @relation("CredentialsCreatedByAdmin")
+  levelAssignedForChildren      Child[]                    @relation("LevelAssignedByAdmin")
+  reviewedPayments              Payment[]                  @relation("PaymentReviewedByAdmin")
+  reviewedAssessments           Assessment[]               @relation("AssessmentReviewedByAdmin")
+  triggeredAssessments          Assessment[]               @relation("AssessmentTriggeredByAdmin")
   assessmentConfigs             AssessmentConfig[]
   assessmentDefaultsCreated     AssessmentDefaultContent[] @relation("AssessmentDefaultsCreatedBy")
+  reviewedProfileChanges        ProfileChangeRequest[]
 }
 
 model Parent {
@@ -160,13 +170,14 @@ model Child {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  payment           Payment?
-  assessments       Assessment[]
-  dailySubmissions  DailySubmission[]
-  rpEvents          RpEvent[]
-  uploadedFiles     File[]            @relation("FilesUploadedByChild")
-  auditLogsTargeted AdminAuditLog[]   @relation("AuditTargetChild")
-  unknownWords      UnknownWord[]
+  payment               Payment?
+  assessments           Assessment[]
+  dailySubmissions      DailySubmission[]
+  rpEvents              RpEvent[]
+  uploadedFiles         File[]                 @relation("FilesUploadedByChild")
+  auditLogsTargeted     AdminAuditLog[]        @relation("AuditTargetChild")
+  unknownWords          UnknownWord[]
+  profileChangeRequests ProfileChangeRequest[]
 
   @@index([status])
   @@index([parentId])
@@ -476,6 +487,34 @@ model AdminAuditLog {
   @@index([adminId])
   @@index([targetChildId])
   @@index([createdAt])
+}
+
+// Profile change request — students submit requests to change allowed profile fields.
+// Admin reviews each request and approves (applies changes) or rejects (with optional note).
+// One PENDING request per child at a time — enforced at the API layer.
+model ProfileChangeRequest {
+  id      String @id @default(uuid())
+  childId String
+  child   Child  @relation(fields: [childId], references: [id], onDelete: Cascade)
+
+  status ProfileChangeRequestStatus @default(PENDING)
+
+  // JSON object: { field: newValue } — only allowed fields (name, grade, parent info, subjects)
+  requestedChanges Json
+
+  // Snapshot of the current values at submission time — enables admin diff view
+  snapshotBefore Json
+
+  requestedAt DateTime @default(now())
+
+  reviewedAt        DateTime?
+  reviewedByAdminId String?
+  reviewedByAdmin   Admin?    @relation(fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  adminNote         String?
+
+  @@index([childId])
+  @@index([status])
+  @@index([requestedAt])
 }
 
 // Vocabulary capture — students save unfamiliar words during tasks and assessments.

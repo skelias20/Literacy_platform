@@ -262,6 +262,20 @@ export default async function StudentHomePage() {
         </div>
       )}
 
+      {/* Profile */}
+      <div className="mt-6 rounded border p-4">
+        <p className="font-medium">My Profile</p>
+        <p className="mt-1 text-sm text-gray-700">
+          View your profile information or request changes to your name, grade, or contact details.
+        </p>
+        <Link
+          className="mt-3 inline-block rounded bg-black px-4 py-2 text-sm text-white"
+          href="/student/profile"
+        >
+          View / Update Profile
+        </Link>
+      </div>
+
       {/* Unknown word list */}
       {(child.status === "active" || child.status === "pending_level_review") && (
         <div className="mt-6 rounded border p-4">

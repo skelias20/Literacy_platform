@@ -45,6 +45,9 @@ export default async function AdminHomePage() {
 <Link className="underline" href="/admin/inactive-students">
   Inactive Students
 </Link>
+<Link className="underline" href="/admin/profile-change-requests">
+  Profile Change Requests
+</Link>
 </div>
     </main>
   );
