@@ -146,6 +146,11 @@ export default function AdminStudentsPage() {
   const [archiveLoading, setArchiveLoading] = useState(false);
   const [archiveErr, setArchiveErr]         = useState<string | null>(null);
 
+  // Periodic trigger state
+  const [triggerConfirm, setTriggerConfirm] = useState(false);
+  const [triggerLoading, setTriggerLoading] = useState(false);
+  const [triggerResult, setTriggerResult]   = useState<{ ok: boolean; skipped: boolean; msg: string } | null>(null);
+
   // ── Load list ───────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -186,6 +191,9 @@ export default function AdminStudentsPage() {
     setResetResult(null);
     setResetErr(null);
     setArchiveErr(null);
+    setTriggerConfirm(false);
+    setTriggerLoading(false);
+    setTriggerResult(null);
     setDetailLoading(true);
 
     const res = await adminFetch(`/api/admin/students/${id}`);
@@ -282,6 +290,9 @@ export default function AdminStudentsPage() {
     setResetResult(null);
     setResetErr(null);
     setArchiveErr(null);
+    setTriggerConfirm(false);
+    setTriggerLoading(false);
+    setTriggerResult(null);
   }
 
   async function handleReset() {
@@ -335,6 +346,25 @@ export default function AdminStudentsPage() {
     const listRes = await adminFetch(`/api/admin/students?${qs.toString()}`);
     const listData = await listRes.json().catch(() => ({}));
     if (listRes.ok) setStudents(listData.students ?? []);
+  }
+
+  async function handleTriggerPeriodic() {
+    if (!detail) return;
+    setTriggerLoading(true);
+    setTriggerResult(null);
+    const res = await adminFetch("/api/admin/assessments/trigger-periodic", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scope: "student", childId: detail.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setTriggerLoading(false);
+    setTriggerConfirm(false);
+    setTriggerResult({
+      ok: res.ok,
+      skipped: res.ok && data.triggered === 0 && data.skipped > 0,
+      msg: res.ok ? data.message : (data.error ?? "Failed to trigger assessment."),
+    });
   }
 
   function toggleSort(field: typeof sort) {
@@ -651,6 +681,60 @@ export default function AdminStudentsPage() {
                     Status and level are controlled by the assessment workflow — not editable here.
                   </p>
                 </section>
+
+                {/* Periodic trigger — active students only */}
+                {detail.status === "active" && !detail.archivedAt && !editing && (
+                  <section>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
+                      Periodic Assessment
+                    </h3>
+                    {triggerResult ? (
+                      <div className={`rounded border px-4 py-3 text-sm ${
+                        !triggerResult.ok
+                          ? "border-red-200 bg-red-50 text-red-600"
+                          : triggerResult.skipped
+                          ? "border-yellow-300 bg-yellow-50 text-yellow-800"
+                          : "border-green-300 bg-green-50 text-green-700"
+                      }`}>
+                        {triggerResult.msg}
+                        <button
+                          onClick={() => setTriggerResult(null)}
+                          className="ml-3 text-xs underline opacity-70"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                    ) : triggerConfirm ? (
+                      <div className="rounded border border-orange-200 bg-orange-50 px-4 py-3 space-y-2">
+                        <p className="text-sm text-orange-800">
+                          Trigger a new periodic assessment for <strong>{detail.childFirstName}</strong>? They will see a pending banner on their next login.
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={handleTriggerPeriodic}
+                            disabled={triggerLoading}
+                            className="rounded bg-orange-600 px-3 py-1.5 text-sm text-white hover:bg-orange-700 disabled:opacity-60"
+                          >
+                            {triggerLoading ? "Triggering…" : "Confirm"}
+                          </button>
+                          <button
+                            onClick={() => setTriggerConfirm(false)}
+                            className="rounded border px-3 py-1.5 text-sm"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setTriggerConfirm(true)}
+                        className="rounded border border-orange-300 px-3 py-1.5 text-sm text-orange-700 hover:bg-orange-50"
+                      >
+                        Trigger Periodic Assessment
+                      </button>
+                    )}
+                  </section>
+                )}
 
                 {/* Child info */}
                 <section>

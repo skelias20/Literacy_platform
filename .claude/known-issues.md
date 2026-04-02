@@ -171,30 +171,93 @@ Create a controlled edit-request workflow:
 
 ---
 
-## ISSUE-23: Per-student periodic trigger is not yet built
 
-**Area:** Admin student management
+## ISSUE-24: Mobile and PC responsiveness — platform-wide UX audit needed
+
+**Area:** Frontend UX / responsive design
 
 **Problem:**
-Architecture is defined for a per-student periodic trigger, but the implementation is not built yet.
+The platform UI was built primarily for desktop. Students (children) and parents are likely to access the platform on mobile devices, particularly for tasks and assessments. Unresponsive layouts, small tap targets, horizontal overflow, and non-touch-friendly controls create friction and accessibility problems. The admin panel is secondary — desktop-first is acceptable there — but the student-facing experience must be genuinely usable on mobile.
+
+**Scope:**
+- Student UI: dashboard, assessment pages, daily task pages, listening player, audio recorder, writing input
+- Admin UI: at minimum must not break on tablet; full mobile support is lower priority
+- Backend: no changes expected — this is almost entirely a UI concern
+
+**Specific concerns to address:**
+- Layout: use responsive Tailwind breakpoints (`sm:`, `md:`) throughout student pages
+- Touch targets: buttons and interactive elements must meet minimum 44×44px tap size
+- Typography: base font size must be readable on small screens without zoom
+- Audio recorder: `MediaRecorder` flow must work on mobile browsers (Safari iOS has known limitations with `audio/webm` — may need format detection fallback)
+- Listening player: progress bar and controls must be touch-friendly
+- Writing textarea: must not be obscured by on-screen keyboard on mobile — use `scroll-into-view` or `dvh` units
+- Image/content display: content items must scale correctly on narrow viewports
+- Navigation: student nav must be accessible without horizontal scroll on 375px width screens
+
+**Planned enhancement already in backlog:**
+ISSUE-20 (optional instructional video URL per task/assessment) is part of this broader initiative — embedding an explanatory video on a task or assessment page directly reduces the need for external guidance and improves mobile-first discoverability.
+
+**Suggested approach:**
+1. Audit each student-facing page at 375px (iPhone SE) and 768px (tablet) widths
+2. Fix layout, spacing, and touch targets per page
+3. Validate audio recording on iOS Safari specifically
+4. Apply minimal responsive improvements to admin panel (no horizontal overflow)
+
+**Priority:** High for student pages — should be addressed before any public-facing release.
+
+---
+
+## ISSUE-25: Student status representation in the admin panel needs clarity
+
+**Area:** Admin UI — student list and detail panel
+
+**Problem:**
+The admin panel shows student status as a badge (e.g. "Pending Review", "Active") but does not communicate:
+- What the admin's expected next action is for each status
+- Whether the student is blocked and why
+- Whether a periodic assessment is currently pending for an active student
+
+Admins must interpret status mentally and navigate elsewhere to take action. This creates workflow friction, especially as the student count grows.
+
+**Specific gaps:**
+- No inline call-to-action on the student card or detail panel (e.g. "Assign level →", "Approve payment →")
+- No indicator that an active student currently has a pending periodic assessment triggered
+- No visual distinction between "active and progressing" vs "active but stuck / no recent submissions"
+- `lastDailySubmissionAt` is in the detail payload but not prominently surfaced
 
 **Potential solution:**
-On `/admin/students/[childId]`, add a button that calls:
+- Add a context-aware action hint below the status badge in the detail panel: e.g. for `pending_level_review` → "Assessment submitted — assign a level to continue"
+- Show a secondary badge on active students if a periodic assessment is currently open (unsubmitted)
+- Surface `lastDailySubmissionAt` prominently in the detail panel with a staleness indicator (e.g. "> 7 days ago")
+- Consider a "needs attention" flag on list cards for statuses requiring admin action
 
-```
-POST /api/admin/assessments/trigger-periodic
-{ scope: "student", childId }
-```
+**Priority:** Medium — improves admin operational efficiency, important as student count scales.
 
-Add a discriminated-union schema case such as:
+---
 
-```ts
-z.object({
-  scope: z.literal("student"),
-  childId: IdSchema
-})
-```
+## ISSUE-26: Admin assessment review UI does not distinguish initial from periodic assessments
 
-**Priority:** Planned admin workflow enhancement.
+**Area:** Admin UI — assessment review panel (`/admin/assessments`)
+
+**Problem:**
+Initial assessments and periodic re-evaluations are different in purpose, allowed actions, and consequences:
+- Initial: determines level placement → assigns level → transitions student to `active`
+- Periodic: re-evaluates existing student → admin may update level → student stays `active`
+
+Currently the review UI presents both in a similar format. Admins must remember which type they are reviewing. There is no visual distinction, no contextual label, and no enforcement of which actions are available per type at the UI layer.
+
+**Specific gaps:**
+- No prominent label indicating "Initial Assessment" vs "Periodic Re-evaluation"
+- Assign-level action is gated to the last session tab (correct) but there is no explanation of why for periodic — which already has a level
+- If admin updates a level from periodic review, there is no confirmation step calling out the level change consequence
+- Assessment list (`/admin/assessments`) mixes both types — filtering exists but the default view is not clearly separated
+
+**Potential solution:**
+- Add a prominent type badge: "Initial Placement" (amber/orange) vs "Periodic Re-evaluation" (blue/indigo) on the review panel header and list cards
+- For periodic assessments: change the action label from "Assign Level" to "Update Level" and show the student's current level alongside the selector
+- Add a confirmation step when updating a level from a periodic review: "This will change [Student]'s level from [X] to [Y]. Confirm?"
+- Default the assessment list to two sections: "Initial — Pending Review" and "Periodic — Pending Review" rather than a flat mixed list
+
+**Priority:** Medium — important for operational correctness as periodic assessments are triggered more frequently.
 
 ---

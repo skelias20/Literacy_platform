@@ -1,14 +1,9 @@
 // app/api/admin/assessments/trigger-periodic/route.ts
-// Triggers periodic re-evaluation assessments for a cohort.
+// Triggers periodic re-evaluation assessments.
 // Scope options:
 //   { scope: "all" }                          — all active students
 //   { scope: "level", level: "foundational" } — all active students at a specific level
-//
-// Future student-level trigger (not built yet — architecture note):
-//   { scope: "student", childId: "..." }
-//   Same underlying logic — just a single childId instead of a level query.
-//   Add a button on /admin/students/[childId] detail panel that calls this route
-//   with scope: "student". No schema changes needed.
+//   { scope: "student", childId: "..." }      — single active student (triggered from student detail panel)
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
@@ -16,14 +11,14 @@ import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
 import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
-import { LiteracyLevelSchema } from "@/lib/schemas";
+import { LiteracyLevelSchema, IdSchema } from "@/lib/schemas";
 
 export const runtime = "nodejs";
 
 const TriggerPeriodicSchema = z.discriminatedUnion("scope", [
   z.object({ scope: z.literal("all") }),
   z.object({ scope: z.literal("level"), level: LiteracyLevelSchema }),
-  // student scope is intentionally not implemented yet — see file header comment
+  z.object({ scope: z.literal("student"), childId: IdSchema }),
 ]);
 
 async function requireAdmin(): Promise<string | null> {
@@ -51,20 +46,36 @@ export async function POST(req: Request) {
     const body = parsed.data;
 
     // ── Find target students ──────────────────────────────────────────────
-    const targetStudents = await prisma.child.findMany({
-      where: {
-        status: "active",
-        archivedAt: null,
-        ...(body.scope === "level" ? { level: body.level } : {}),
-      },
-      select: { id: true },
-    });
+    let targetStudents: { id: string; level: string | null }[];
 
-    if (targetStudents.length === 0) {
-      return NextResponse.json(
-        { error: "No active students found for the selected scope." },
-        { status: 400 }
-      );
+    if (body.scope === "student") {
+      const child = await prisma.child.findFirst({
+        where: { id: body.childId, status: "active", archivedAt: null },
+        select: { id: true, level: true },
+      });
+      if (!child) {
+        return NextResponse.json(
+          { error: "Student not found or not eligible for a periodic assessment." },
+          { status: 404 }
+        );
+      }
+      targetStudents = [child];
+    } else {
+      targetStudents = await prisma.child.findMany({
+        where: {
+          status: "active",
+          archivedAt: null,
+          ...(body.scope === "level" ? { level: body.level } : {}),
+        },
+        select: { id: true, level: true },
+      });
+
+      if (targetStudents.length === 0) {
+        return NextResponse.json(
+          { error: "No active students found for the selected scope." },
+          { status: 400 }
+        );
+      }
     }
 
     // ── Create periodic assessment for each target student ────────────────
@@ -76,11 +87,14 @@ export async function POST(req: Request) {
 
     await prisma.$transaction(async (tx) => {
       for (const student of targetStudents) {
-        // Check for existing open periodic assessment
+        // Check for existing open periodic assessment.
+        // Must match isLatest: true — orphaned rows (isLatest: false, submittedAt: null)
+        // from stale bulk triggers should not block a new trigger.
         const existing = await tx.assessment.findFirst({
           where: {
             childId: student.id,
             kind: "periodic",
+            isLatest: true,
             submittedAt: null,
           },
           select: { id: true },
@@ -112,6 +126,9 @@ export async function POST(req: Request) {
             sessionNumber: nextSession,
             isLatest: true,
             triggeredByAdminId: adminId,
+            // Snapshot the student's current level at trigger time so slot lookups
+            // remain stable even if the admin later changes the student's level.
+            lookupLevel: student.level ?? undefined,
           },
         });
 
@@ -122,10 +139,11 @@ export async function POST(req: Request) {
       await tx.adminAuditLog.create({
         data: {
           adminId,
-          action: "LEVEL_CHANGED", // closest existing action — TODO: add PERIODIC_TRIGGERED to enum
+          action: "PERIODIC_TRIGGERED",
           metadata: {
             scope: body.scope,
             ...(body.scope === "level" ? { level: body.level } : {}),
+            ...(body.scope === "student" ? { childId: body.childId } : {}),
             studentsTriggered: created.length,
             studentsSkipped: skipped.length,
           },

@@ -44,6 +44,13 @@
 
 ---
 
+### COMPLETED (Session VIII)
+
+#### Admin student panel
+* Per-student periodic trigger button in student detail panel — `scope: "student"` added to `trigger-periodic` route; two-step confirmation UI; only visible for active non-archived students; audit action fixed from `LEVEL_CHANGED` → `PERIODIC_TRIGGERED` for all scopes (ISSUE-23)
+
+---
+
 ### COMPLETED (Session VII)
 
 #### Daily task management (admin)
@@ -78,7 +85,14 @@
 
 
 ### PENDING — NEAR TERM
-* Per-student periodic trigger button on /admin/students/[childId] — architecture designed, no schema change needed, just UI button + route call
+
+* **ISSUE-17:** Grade range enforcement (1–8) — frontend validation + backend Zod refinement on registration route.
+
+* **ISSUE-24:** Mobile/PC responsiveness audit — student-facing pages first (dashboard, assessment, tasks, audio recorder). Admin panel: no horizontal overflow at tablet width minimum.
+
+* **ISSUE-25:** Admin student status clarity — action hints per status, periodic assessment pending badge on active students, `lastDailySubmissionAt` staleness indicator in detail panel.
+
+* **ISSUE-26:** Differentiate initial vs periodic assessment review UI — type badge, "Update Level" vs "Assign Level" label, level-change confirmation step, split list sections.
 
 * Refresh-token flow — deferred
 * Redis-backed rate limiter — deferred
