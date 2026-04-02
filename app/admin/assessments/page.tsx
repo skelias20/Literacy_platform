@@ -44,6 +44,16 @@ type Artifact = {
   contentItem: { id: string; title: string; skill: string; type: string; textBody: string | null; assetUrl: string | null } | null;
 };
 
+type HistoryRow = {
+  id: string; kind: AssessmentKind; sessionNumber: number; taskFormat: TaskFormat;
+  submittedAt: string; assignedLevel: LiteracyLevel | null; reviewedAt: string | null;
+  child: {
+    id: string; childFirstName: string; childLastName: string;
+    grade: number; level: LiteracyLevel | null;
+    parent: { email: string; phone: string; firstName: string; lastName: string };
+  };
+};
+
 type ConfigData = {
   id: string | null;
   initialSessionCount: number;
@@ -71,6 +81,7 @@ const SKILLS: SkillType[]     = ["reading", "listening", "writing", "speaking"];
 const KIND_LABELS: Record<AssessmentKind, string> = {
   initial: "Initial", periodic: "Periodic re-evaluation",
 };
+const HISTORY_PAGE_SIZE = 20;
 
 function newQid() { return `q${Date.now()}_${Math.random().toString(36).slice(2, 6)}`; }
 
@@ -134,6 +145,21 @@ export default function AdminAssessmentsPage() {
   const [triggering, setTriggering]     = useState(false);
   const [triggerMsg, setTriggerMsg]     = useState<string | null>(null);
   const [triggerErr, setTriggerErr]     = useState<string | null>(null);
+
+  // History section
+  const [historyOpen, setHistoryOpen]                           = useState(false);
+  const [historyItems, setHistoryItems]                         = useState<HistoryRow[]>([]);
+  const [historyTotal, setHistoryTotal]                         = useState(0);
+  const [historyPage, setHistoryPage]                           = useState(1);
+  const [historyLoading, setHistoryLoading]                     = useState(false);
+  const [historyKind, setHistoryKind]                           = useState<"" | "initial" | "periodic">("");
+  const [historySearch, setHistorySearch]                       = useState("");
+  const [historyDateFrom, setHistoryDateFrom]                   = useState("");
+  const [historyDateTo, setHistoryDateTo]                       = useState("");
+  const [historyExpandedId, setHistoryExpandedId]               = useState<string | null>(null);
+  const [historyExpandedSessions, setHistoryExpandedSessions]   = useState<SessionDetail[]>([]);
+  const [historyExpandedActive, setHistoryExpandedActive]       = useState(1);
+  const [historyExpandedLoading, setHistoryExpandedLoading]     = useState(false);
 
   async function loadList() {
     setListLoading(true);
@@ -380,6 +406,35 @@ export default function AdminAssessmentsPage() {
     if (!res.ok) { setTriggerErr((data as { error?: string }).error ?? "Failed."); return; }
     setTriggerMsg((data as { message?: string }).message ?? "Re-evaluations triggered.");
     await loadList();
+  }
+
+  async function loadHistory(p: number) {
+    setHistoryLoading(true);
+    const params = new URLSearchParams({ page: String(p) });
+    if (historyKind)           params.set("kind",     historyKind);
+    if (historySearch.trim())  params.set("search",   historySearch.trim());
+    if (historyDateFrom)       params.set("dateFrom", historyDateFrom);
+    if (historyDateTo)         params.set("dateTo",   historyDateTo);
+    const res  = await adminFetch(`/api/admin/assessments/history?${params}`);
+    const data = await res.json().catch(() => ({}));
+    setHistoryItems(data.history ?? []);
+    setHistoryTotal(data.total ?? 0);
+    setHistoryPage(p);
+    setHistoryLoading(false);
+  }
+
+  async function openHistoryDetail(row: HistoryRow) {
+    if (historyExpandedId === row.id) { setHistoryExpandedId(null); return; }
+    setHistoryExpandedId(row.id);
+    setHistoryExpandedSessions([]);
+    setHistoryExpandedLoading(true);
+    const res  = await adminFetch(`/api/admin/assessments/${row.id}`);
+    const data = await res.json().catch(() => ({}));
+    setHistoryExpandedLoading(false);
+    const sessions: SessionDetail[] = data.allSessions ?? [];
+    setHistoryExpandedSessions(sessions);
+    const latest = sessions.filter((s) => s.submittedAt).at(-1);
+    setHistoryExpandedActive(latest?.sessionNumber ?? 1);
   }
 
   const isAlreadyAssigned = selectedRow?.kind === "initial" && !!selectedRow.assignedLevel;
@@ -787,6 +842,191 @@ export default function AdminAssessmentsPage() {
           </div>
 
         </div>
+      </div>
+
+      {/* ── Assessment History ───────────────────────────────────────────── */}
+      <div className="mt-8">
+        <button
+          className="flex items-center gap-2 text-sm font-semibold text-gray-700 hover:text-black"
+          onClick={() => {
+            const next = !historyOpen;
+            setHistoryOpen(next);
+            if (next && historyItems.length === 0) loadHistory(1);
+          }}
+        >
+          <span>{historyOpen ? "▾" : "▸"}</span>
+          Assessment History
+          <span className="text-xs font-normal text-gray-400">(completed — level already assigned)</span>
+        </button>
+
+        {historyOpen && (
+          <div className="mt-3 rounded border p-4">
+            {/* Filters */}
+            <div className="flex flex-wrap gap-3 items-end mb-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Kind</label>
+                <select className="rounded border px-2 py-1 text-sm"
+                  value={historyKind}
+                  onChange={(e) => setHistoryKind(e.target.value as "" | "initial" | "periodic")}>
+                  <option value="">All</option>
+                  <option value="initial">Initial</option>
+                  <option value="periodic">Periodic</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">Student name</label>
+                <input type="text" placeholder="Search…" className="rounded border px-2 py-1 text-sm w-36"
+                  value={historySearch}
+                  onChange={(e) => setHistorySearch(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") loadHistory(1); }} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">From</label>
+                <input type="date" className="rounded border px-2 py-1 text-sm"
+                  value={historyDateFrom}
+                  onChange={(e) => setHistoryDateFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">To</label>
+                <input type="date" className="rounded border px-2 py-1 text-sm"
+                  value={historyDateTo}
+                  onChange={(e) => setHistoryDateTo(e.target.value)} />
+              </div>
+              <button className="rounded bg-black px-3 py-1.5 text-sm text-white"
+                onClick={() => loadHistory(1)}>
+                Apply
+              </button>
+            </div>
+
+            {/* Results */}
+            {historyLoading && <p className="text-sm text-gray-500">Loading…</p>}
+            {!historyLoading && historyItems.length === 0 && (
+              <p className="text-sm text-gray-600">No completed assessments found.</p>
+            )}
+            {!historyLoading && historyItems.length > 0 && (
+              <div className="space-y-2">
+                {historyItems.map((row) => {
+                  const isExpanded = historyExpandedId === row.id;
+                  const expandedSessionData = isExpanded
+                    ? historyExpandedSessions.find((s) => s.sessionNumber === historyExpandedActive)
+                    : null;
+                  return (
+                    <div key={row.id} className="rounded border">
+                      <button
+                        className="w-full text-left px-3 py-2 hover:bg-gray-50 flex items-center justify-between gap-4"
+                        onClick={() => openHistoryDetail(row)}>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-sm">
+                            {row.child.childFirstName} {row.child.childLastName}
+                          </span>
+                          <span className={`rounded-full px-2 py-0.5 text-xs ${row.kind === "periodic" ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"}`}>
+                            {KIND_LABELS[row.kind]}{row.kind === "periodic" && ` #${row.sessionNumber}`}
+                          </span>
+                          {row.assignedLevel && (
+                            <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800 capitalize">
+                              {row.assignedLevel}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-3 shrink-0 text-xs text-gray-400">
+                          <span>Grade {row.child.grade}</span>
+                          <span>{new Date(row.submittedAt).toLocaleDateString()}</span>
+                          <span>{isExpanded ? "▴" : "▾"}</span>
+                        </div>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="border-t px-3 py-3">
+                          {historyExpandedLoading && <p className="text-sm text-gray-500">Loading…</p>}
+                          {!historyExpandedLoading && historyExpandedSessions.length > 1 && (
+                            <div className="flex flex-wrap gap-1 mb-3">
+                              {historyExpandedSessions.map((s) => (
+                                <button key={s.sessionNumber}
+                                  onClick={() => setHistoryExpandedActive(s.sessionNumber)}
+                                  className={`rounded px-2 py-1 text-xs ${historyExpandedActive === s.sessionNumber ? "bg-black text-white" : "border text-gray-600 hover:bg-gray-50"}`}>
+                                  Session {s.sessionNumber}
+                                  {s.assignedLevel && (
+                                    <span className="ml-1 text-green-400">✓</span>
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {!historyExpandedLoading && expandedSessionData && (
+                            <div className="space-y-2">
+                              {expandedSessionData.artifacts.length === 0 && (
+                                <p className="text-sm text-gray-600">No artifacts for this session.</p>
+                              )}
+                              {expandedSessionData.artifacts.map((x) => (
+                                <div key={x.id} className="rounded border p-3">
+                                  <p className="text-sm font-medium capitalize">{x.skill}</p>
+                                  {x.contentItem && (
+                                    <div className="mt-1 rounded bg-gray-50 px-2 py-1.5">
+                                      <p className="text-xs font-medium text-gray-500">Source: {x.contentItem.title}</p>
+                                      {x.contentItem.textBody && (
+                                        <details className="mt-1">
+                                          <summary className="cursor-pointer text-xs text-blue-600 underline">View source text</summary>
+                                          <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border bg-white p-2 text-xs">{x.contentItem.textBody}</pre>
+                                        </details>
+                                      )}
+                                      {x.contentItem.assetUrl && !x.contentItem.textBody && (
+                                        <a
+                                          className="mt-0.5 inline-block text-xs text-blue-600 underline"
+                                          href={`/api/admin/files/${x.contentItem.assetUrl.split("/").pop()}`}
+                                          target="_blank" rel="noreferrer"
+                                        >
+                                          Play / download source audio
+                                        </a>
+                                      )}
+                                    </div>
+                                  )}
+                                  {x.textBody && (
+                                    <pre className="mt-2 whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs">{x.textBody}</pre>
+                                  )}
+                                  {x.fileId && !x.textBody && (
+                                    <a className="mt-2 inline-block text-xs underline"
+                                      href={`/api/admin/files/${x.fileId}`} target="_blank" rel="noreferrer">
+                                      Download recording
+                                    </a>
+                                  )}
+                                  {x.answersJson && !x.textBody && !x.fileId && (
+                                    <AnswersReview entries={x.answersJson} />
+                                  )}
+                                  {!x.textBody && !x.fileId && !x.answersJson && (
+                                    <p className="mt-1 text-xs text-gray-400">(No response)</p>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Pagination */}
+            {!historyLoading && historyTotal > HISTORY_PAGE_SIZE && (
+              <div className="mt-4 flex items-center justify-between text-sm">
+                <button className="rounded border px-3 py-1 disabled:opacity-50"
+                  disabled={historyPage <= 1}
+                  onClick={() => loadHistory(historyPage - 1)}>
+                  ← Previous
+                </button>
+                <span className="text-xs text-gray-500">
+                  Page {historyPage} of {Math.ceil(historyTotal / HISTORY_PAGE_SIZE)} · {historyTotal} total
+                </span>
+                <button className="rounded border px-3 py-1 disabled:opacity-50"
+                  disabled={historyPage >= Math.ceil(historyTotal / HISTORY_PAGE_SIZE)}
+                  onClick={() => loadHistory(historyPage + 1)}>
+                  Next →
+                </button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </main>
   );

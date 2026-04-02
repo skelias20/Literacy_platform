@@ -42,6 +42,7 @@ export default async function StudentHomePage() {
     isCompleted: boolean; submittedAt: Date | null;
   }[] = [];
   let totalRp = 0;
+  let unknownWordCount = 0;
 
   // ── Assessment banner states (active students only) ───────────────────
   let hasPendingInitial       = false; // session created but not yet submitted
@@ -50,11 +51,15 @@ export default async function StudentHomePage() {
   let shouldRecommendTomorrow = false; // previous session was submitted today
 
   if (child.status === "active") {
-    const rpAgg = await prisma.rpEvent.aggregate({
-      where: { childId: child.id },
-      _sum: { delta: true },
-    });
-    totalRp = rpAgg._sum.delta ?? 0;
+    const [rpAgg, wordCount] = await prisma.$transaction([
+      prisma.rpEvent.aggregate({
+        where: { childId: child.id },
+        _sum:  { delta: true },
+      }),
+      prisma.unknownWord.count({ where: { childId: child.id } }),
+    ]);
+    totalRp          = rpAgg._sum.delta ?? 0;
+    unknownWordCount = wordCount;
 
     // Open periodic assessment
     const openPeriodic = await prisma.assessment.findFirst({
@@ -104,6 +109,10 @@ export default async function StudentHomePage() {
         shouldRecommendTomorrow = t >= today && t < tomorrowStart;
       }
     }
+  }
+
+  if (child.status === "pending_level_review") {
+    unknownWordCount = await prisma.unknownWord.count({ where: { childId: child.id } });
   }
 
   // Session counter for assessment_required students
@@ -253,6 +262,24 @@ export default async function StudentHomePage() {
         </div>
       )}
 
+      {/* Unknown word list */}
+      {(child.status === "active" || child.status === "pending_level_review") && (
+        <div className="mt-6 rounded border p-4">
+          <p className="font-medium">My Unknown Words</p>
+          <p className="mt-1 text-sm text-gray-700">
+            {unknownWordCount === 0
+              ? "You haven't saved any unknown words yet."
+              : `You have ${unknownWordCount} word${unknownWordCount !== 1 ? "s" : ""} saved.`}
+          </p>
+          <Link
+            className="mt-3 inline-block rounded bg-black px-4 py-2 text-sm text-white"
+            href="/student/words"
+          >
+            View Word List
+          </Link>
+        </div>
+      )}
+
       {/* Daily tasks */}
       {child.status === "active" && (
         <div className="mt-6 rounded border p-4">
@@ -265,13 +292,19 @@ export default async function StudentHomePage() {
                 <div key={t.id} className="flex items-center justify-between rounded border p-3">
                   <div>
                     <p className="font-medium capitalize">{t.skill}</p>
-                    <p className="text-xs text-gray-600">{t.isCompleted ? "Completed ✅" : "Not completed yet"}</p>
+                    <p className="text-xs text-gray-600">
+                      {t.isCompleted
+                        ? "Completed ✅"
+                        : t.submittedAt
+                        ? "Submitted — retry questions available"
+                        : "Not completed yet"}
+                    </p>
                   </div>
                   {t.isCompleted ? (
                     <span className="text-sm text-gray-600">Locked</span>
                   ) : (
                     <Link className="rounded bg-black px-3 py-1 text-sm text-white" href={`/student/tasks/${t.id}`}>
-                      Start
+                      {t.submittedAt ? "Continue" : "Start"}
                     </Link>
                   )}
                 </div>

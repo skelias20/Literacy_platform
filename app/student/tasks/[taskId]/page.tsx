@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { studentFetch } from "@/lib/fetchWithAuth";
 import { countWords } from "@/lib/wordCount";
+import UnknownWordSaver from "@/components/UnknownWordSaver";
 
 type SkillType  = "reading" | "listening" | "writing" | "speaking";
 type TaskFormat = "free_response" | "mcq" | "msaq" | "fill_blank";
@@ -91,6 +92,34 @@ export default function StudentDailyTaskPage() {
         setResultAnswers(art.answersJson as AnswerEntry[]);
         setShowResult(true);
       }
+      // Rehydrate attempt number for structured listening mid-retry (attempt 1 done, not yet locked)
+      if (skill === "listening" && !existing.isCompleted && existing.submittedAt) {
+        const saved = localStorage.getItem(`task_attempt_${id}`);
+        if (saved) {
+          const n = parseInt(saved, 10);
+          if (n >= 2 && n <= 3) setAttemptNumber(n);
+        }
+      }
+      // Clear localStorage once the task is fully locked
+      if (existing.isCompleted) {
+        localStorage.removeItem(`task_attempt_${id}`);
+        localStorage.removeItem(`task_draft_${id}`);
+      }
+    } else {
+      // No server submission yet — restore draft answers from localStorage
+      const savedDraft = localStorage.getItem(`task_draft_${id}`);
+      if (savedDraft) {
+        try {
+          const draft = JSON.parse(savedDraft) as {
+            textResponse?: string;
+            structuredAnswers?: Record<string, string | string[]>;
+            audioFileId?: string;
+          };
+          if (draft.textResponse)      setTextResponse(draft.textResponse);
+          if (draft.structuredAnswers) setStructuredAnswers(draft.structuredAnswers);
+          if (draft.audioFileId)       setAudioFileId(draft.audioFileId);
+        } catch { /* ignore corrupted draft */ }
+      }
     }
     setLoading(false);
   }
@@ -98,31 +127,43 @@ export default function StudentDailyTaskPage() {
   useEffect(() => {
     if (!taskId) return;
     let cancelled = false;
-    const run = async () => {
-      setLoading(true); setErr(null);
-      const res  = await studentFetch(`/api/student/daily-tasks/${taskId}`);
-      const data = (await res.json().catch(() => ({}))) as TaskDetail & { error?: string };
-      if (cancelled) return;
-      if (!res.ok) { setErr(data.error ?? "Failed to load task."); setLoading(false); return; }
-      setDetail(data);
-      const skill = data.task.skill;
-      const existing = data.existingSubmission;
-      if (existing) {
-        const art = existing.artifacts.find((a) => a.skill === skill);
-        if ((skill === "listening" || skill === "writing") && art?.textBody) setTextResponse(art.textBody);
-        if ((skill === "reading" || skill === "speaking") && art?.fileId)    setAudioFileId(art.fileId);
-        if (skill === "listening" && art?.answersJson) {
-          setResultAnswers(art.answersJson as AnswerEntry[]);
-          setShowResult(true);
-        }
+    // Delegate to the standalone load() — same fetch + state-restore logic used after submit.
+    // The cancelled flag guards the catch handler only; load() handles all normal error paths.
+    load(taskId).catch((e) => {
+      if (!cancelled) {
+        console.error("[task load]", e);
+        setErr("Failed to load task.");
+        setLoading(false);
       }
-      setLoading(false);
-    };
-    void run();
+    });
     return () => { cancelled = true; };
   }, [taskId]);
 
   const isLocked    = useMemo(() => detail?.existingSubmission?.isCompleted ?? false, [detail]);
+
+  // ── Persist draft to localStorage after load completes ───────────────
+  useEffect(() => {
+    if (!taskId || loading || isLocked) return;
+    localStorage.setItem(`task_draft_${taskId}`, JSON.stringify({
+      textResponse, structuredAnswers, audioFileId,
+    }));
+  }, [taskId, loading, isLocked, textResponse, structuredAnswers, audioFileId]);
+
+  // ── Warn on accidental navigation when progress exists ───────────────
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (isLocked) return;
+      const hasProgress =
+        !!audioBlob ||
+        textResponse.trim().length > 0 ||
+        Object.keys(structuredAnswers).length > 0;
+      if (!hasProgress) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isLocked, audioBlob, textResponse, structuredAnswers]);
   const taskFormat  = detail?.task.taskFormat  ?? "free_response";
   const minWords    = detail?.task.writingMinWords  ?? null;
   const maxWords    = detail?.task.writingMaxWords  ?? null;
@@ -243,7 +284,7 @@ export default function StudentDailyTaskPage() {
           body: JSON.stringify({ attemptNumber: 1, answers: structuredAnswers }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) { setErr(data.error ?? "Submit failed."); setSubmitting(false); return; }
+        if (!res.ok) { setErr(res.status === 404 ? "This task has been removed by your instructor. We appreciate your effort — a new task will be sent your way soon." : data.error ?? "Submit failed."); setSubmitting(false); return; }
         if (data.answersJson) {
           setResultAnswers(data.answersJson as AnswerEntry[]);
           setShowResult(true);
@@ -266,7 +307,7 @@ export default function StudentDailyTaskPage() {
           body: JSON.stringify({ attemptNumber: 3 }),
         });
         const data = await res.json().catch(() => ({}));
-        if (!res.ok) { setErr(data.error ?? "Submit failed."); setSubmitting(false); return; }
+        if (!res.ok) { setErr(res.status === 404 ? "This task has been removed by your instructor. We appreciate your effort — a new task will be sent your way soon." : data.error ?? "Submit failed."); setSubmitting(false); return; }
         await load(detail.task.id);
       }
       setSubmitting(false);
@@ -281,17 +322,21 @@ export default function StudentDailyTaskPage() {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) { setErr(data.error ?? "Submit failed."); setSubmitting(false); return; }
+    if (!res.ok) { setErr(res.status === 404 ? "This task has been removed by your instructor. We appreciate your effort — a new task will be sent your way soon." : data.error ?? "Submit failed."); setSubmitting(false); return; }
 
     await load(detail.task.id);
     setSubmitting(false);
   }
 
-  // Retry — hide results, reset answers, increment attempt
+  // Retry — hide results, reset answers, increment attempt, persist to localStorage
   function retry() {
     setShowResult(false);
     setStructuredAnswers({});
-    setAttemptNumber((n) => Math.min(n + 1, 3));
+    setAttemptNumber((n) => {
+      const next = Math.min(n + 1, 3);
+      if (taskId) localStorage.setItem(`task_attempt_${taskId}`, String(next));
+      return next;
+    });
   }
 
   // ── Recording ─────────────────────────────────────────────────────────
@@ -338,7 +383,11 @@ export default function StudentDailyTaskPage() {
         <div>
           <h1 className="text-3xl font-bold">{skillTitle(detail.task.skill)} Task</h1>
           <p className="mt-1 text-sm text-gray-600">
-            {isLocked ? "Completed ✅ (locked)" : "Complete and submit once."}
+            {isLocked
+              ? "Completed ✅ (locked)"
+              : detail.existingSubmission?.submittedAt
+              ? "Submission saved — you can still retry the questions."
+              : "Complete and submit once."}
           </p>
           {isLocked && detail.existingSubmission && (
             <div className="mt-2 inline-flex items-center gap-2 rounded-full bg-indigo-50 px-4 py-1.5 text-sm font-semibold text-indigo-700">
@@ -513,6 +562,8 @@ export default function StudentDailyTaskPage() {
       {isLocked && (
         <p className="mt-6 text-sm text-gray-500">This task has been submitted and locked.</p>
       )}
+
+      <UnknownWordSaver source="daily_task" />
     </main>
   );
 }

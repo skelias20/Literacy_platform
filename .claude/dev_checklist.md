@@ -67,6 +67,7 @@
 
 #### Student dashboard
 * Session counter on assessment_required banner: "Session X of Y" pill with contextual description
+* Unknown Word List / vocabulary pool — storage model undefined, consumption unclear
 
 #### Slot management (admin)
 * Protected slots (within saved session count) show "Replace with…" dropdown instead of blocked Clear
@@ -75,14 +76,10 @@
 
 ---
 
-### PENDING — IMMEDIATE (Start of Session V)
-* Resolve issues documented in .claude/known-issues.md — identified during Session IV testing but deferred
-
----
 
 ### PENDING — NEAR TERM
 * Per-student periodic trigger button on /admin/students/[childId] — architecture designed, no schema change needed, just UI button + route call
-* Unknown Word List / vocabulary pool — storage model undefined, consumption unclear
+
 * Refresh-token flow — deferred
 * Redis-backed rate limiter — deferred
 

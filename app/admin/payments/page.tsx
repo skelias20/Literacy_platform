@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/fetchWithAuth";
-
+import Link from "next/link";
 type PaymentRow = {
   id: string;
   method: string;
@@ -102,7 +102,7 @@ export default function AdminPaymentsPage() {
   return (
     <main className="p-10">
       <h1 className="text-3xl font-bold">Payments</h1>
-
+      <Link className="underline" href="/admin">Back to admin dashboard</Link>
       <div className="mt-4 flex items-center gap-3">
         <label className="text-sm font-medium">Status:</label>
         <select

@@ -16,7 +16,7 @@ import type { TaskFormat } from "@prisma/client";
 export const runtime = "nodejs";
 
 const MAX_TEXT_LENGTH = 5000;
-const ASSESSMENT_WRITING_MIN = 30;
+const ASSESSMENT_WRITING_MIN = 3;
 const ASSESSMENT_WRITING_MAX = 800;
 
 type McqQuestion  = { id: string; type: "mcq";        prompt: string; options: string[];   correctAnswer: string   };

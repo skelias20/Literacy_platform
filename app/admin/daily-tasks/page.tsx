@@ -54,7 +54,7 @@ export default function AdminDailyTasksPage() {
   const [contentBySkill, setContentBySkill]     = useState<Record<SkillType, string[]>>({ reading: [], listening: [], writing: [], speaking: [] });
 
   // Listening format
-  const [taskFormat, setTaskFormat]   = useState<TaskFormat>("free_response");
+  const [taskFormat, setTaskFormat]   = useState<TaskFormat>("mcq");
   const [questions, setQuestions]     = useState<AnyQ[]>([]);
 
   // Question bank state — tracks what was loaded from the server for the selected audio.
@@ -337,7 +337,7 @@ export default function AdminDailyTasksPage() {
             {selectedSkills.includes("listening") && (
               <div className="text-sm rounded border p-3 bg-gray-50">
                 <span className="block font-medium mb-2">Listening format</span>
-                {(Object.entries(FORMAT_LABELS) as [TaskFormat, string][]).map(([fmt, label]) => (
+                {(Object.entries(FORMAT_LABELS) as [TaskFormat, string][]).filter(([fmt]) => fmt !== "free_response").map(([fmt, label]) => (
                   <label key={fmt} className="flex items-center gap-2 mb-1 cursor-pointer">
                     <input type="radio" name="taskFormat" value={fmt} checked={taskFormat === fmt}
                       onChange={() => {

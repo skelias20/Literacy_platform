@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { adminFetch } from "@/lib/fetchWithAuth";
+import Link from "next/link";
 
 type ChildRow = {
   id: string;
@@ -85,7 +86,7 @@ export default function ApprovedUsersPage() {
       <h1 className="text-3xl font-bold">Approved Users</h1>
 
       {msg && <p className="mt-3 text-sm">{msg}</p>}
-
+      <Link className="underline" href="/admin">Back to admin dashboard</Link>
       <div className="mt-6 space-y-4">
         {rows.length === 0 && (
           <p className="text-sm text-gray-600">No users awaiting credentials.</p>

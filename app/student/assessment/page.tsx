@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { studentFetch } from "@/lib/fetchWithAuth";
 import { countWords } from "@/lib/wordCount";
+import UnknownWordSaver from "@/components/UnknownWordSaver";
 
 type Skill      = "reading" | "listening" | "writing" | "speaking";
 type TaskFormat = "free_response" | "mcq" | "msaq" | "fill_blank";
@@ -27,7 +28,7 @@ type ContentItem = {
 
 const MAX_AUDIO_BYTES        = 10 * 1024 * 1024;
 const MAX_RECORDING_SECONDS  = 600;
-const ASSESSMENT_WRITING_MIN = 30;
+const ASSESSMENT_WRITING_MIN = 3;
 const ASSESSMENT_WRITING_MAX = 800;
 
 function formatDuration(s: number) {
@@ -99,17 +100,63 @@ export default function StudentAssessmentPage() {
         setLoading(false);
         return;
       }
-      setAssessmentId(data.assessmentId ?? "");
+      const aId = data.assessmentId ?? "";
+      // Restore draft answers from localStorage before setting state
+      const savedDraft = localStorage.getItem(`assessment_draft_${aId}`);
+      if (savedDraft) {
+        try {
+          const draft = JSON.parse(savedDraft) as {
+            listeningFree?: string;
+            writingText?: string;
+            structuredAnswers?: Record<string, string | string[]>;
+          };
+          if (draft.listeningFree)    setListeningFree(draft.listeningFree);
+          if (draft.writingText)      setWritingText(draft.writingText);
+          if (draft.structuredAnswers) setStructuredAnswers(draft.structuredAnswers);
+        } catch { /* ignore corrupted draft */ }
+      }
+      setAssessmentId(aId);
       setSessionNumber(data.sessionNumber ?? 1);
       setTotalSessions(data.totalSessions ?? 1);
       setTaskFormat(data.taskFormat ?? "free_response");
       setContent(data.content ?? []);
       setLoading(false);
     };
-    void run();
+    run().catch((e) => {
+      if (!cancelled) {
+        console.error("[assessment load]", e);
+        setErr("Failed to load assessment.");
+        setLoading(false);
+      }
+    });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ── Persist draft answers to localStorage ────────────────────────────
+  useEffect(() => {
+    if (!assessmentId || loading || submitted) return;
+    localStorage.setItem(`assessment_draft_${assessmentId}`, JSON.stringify({
+      listeningFree, writingText, structuredAnswers,
+    }));
+  }, [assessmentId, loading, submitted, listeningFree, writingText, structuredAnswers]);
+
+  // ── Warn on accidental navigation when progress exists ───────────────
+  useEffect(() => {
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      if (submitted) return;
+      const hasProgress =
+        !!readingBlob || !!speakingBlob ||
+        listeningFree.trim().length > 0 ||
+        writingText.trim().length > 0 ||
+        Object.keys(structuredAnswers).length > 0;
+      if (!hasProgress) return;
+      e.preventDefault();
+      e.returnValue = "";
+    }
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [submitted, readingBlob, speakingBlob, listeningFree, writingText, structuredAnswers]);
 
   // ── Timer helpers ─────────────────────────────────────────────────────
   function clearTimer(skill: "reading" | "speaking") {
@@ -227,6 +274,8 @@ export default function StudentAssessmentPage() {
     setSubmitted(true);
     setIsLastSession(data.isLastSession ?? true);
     if (data.answersJson) setResultAnswers(data.answersJson as AnswerEntry[]);
+    // Clear draft — submission is now on the server
+    localStorage.removeItem(`assessment_draft_${assessmentId}`);
   }
 
   // ── Recording helpers ─────────────────────────────────────────────────
@@ -467,6 +516,8 @@ export default function StudentAssessmentPage() {
       >
         {submitting ? "Submitting..." : "Submit Assessment"}
       </button>
+
+      <UnknownWordSaver source="assessment" />
     </main>
   );
 }

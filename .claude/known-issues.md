@@ -47,21 +47,8 @@ Run an end-to-end test:
 
 # 2. System Constraints / Workflow Rules
 
-## ISSUE-12: Initial and periodic assessments likely need separate implementation paths
 
-**Area:** Assessment domain logic
-
-**Problem:**
-Initial and periodic assessments now differ significantly. Trying to force both into one generic path may create repeated conflicts.
-
-**Note:** ISSUE-11 grade mapping is now implemented (Session V). Monitor for further friction as features are added.
-
-**Priority:** Architecture consideration — monitor.
-
----
-
-
-## ISSUE-17: Limit accepted registration grade to 1–8
+## ISSUE-17: Limit accepted registration grade to 1–8(If there is no better way)
 
 **Area:** Registration validation
 
@@ -79,7 +66,7 @@ Enforce on both frontend and backend:
 
 # 3. Future Features / Architecture Decisions
 
-## ISSUE-18: Payment event table is needed
+## ISSUE-18: Payment event table is needed (WIthout removing createdAt in the current schema because that will cause a lot of problems)
 
 **Area:** Payments / finance / audit trail
 
@@ -211,31 +198,3 @@ z.object({
 **Priority:** Planned admin workflow enhancement.
 
 ---
-
-## ISSUE-24: Confirm initial assessment level selection for session 1 is an intentional product decision
-
-**Area:** Assessment slot lookup
-
-**Problem:**
-The student assessment GET route currently uses:
-
-```ts
-child.level ?? "foundational"
-```
-
-for initial assessment slot lookup. This means students without an assigned level all receive foundational content by default.
-
-This may be acceptable as a deliberate baseline strategy, but it must be explicitly confirmed. It may conflict with the newer grade-based mapping proposal (see ISSUE-11).
-
-**Potential solution:**
-Choose one and document it clearly:
-1. All students receive foundational initial assessment content, or
-2. Grade determines initial assessment content band, or
-3. Another temporary assessment-lookup rule
-
-Do not leave this as an accidental implementation detail.
-
-**Priority:** Planned product decision requiring confirmation.
-
----
-

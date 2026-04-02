@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 const MAX_TEXT_LENGTH = 5000;
 
 // Platform constant for assessment writing — no per-task config on assessments
-export const ASSESSMENT_WRITING_MIN = 30;
+export const ASSESSMENT_WRITING_MIN = 3;
 export const ASSESSMENT_WRITING_MAX = 800;
 
 // ── Answer types ──────────────────────────────────────────────────────────
@@ -258,40 +258,56 @@ export async function POST(
     // Attempt 1 → server (persist answersJson to DB). Attempts 2–3 → score locally against
     // correct answers returned from attempt 1. Lock call → server (isCompleted = true).
     // This avoids unnecessary server round-trips and DB writes for intermediate attempts.
+    // RP award rules:
+    //   All non-structured skills  → award on lock (same call)
+    //   Structured listening       → award on attempt 1 (when artifact is persisted to DB).
+    //                                Attempt 3 only sets isCompleted — RP already awarded.
     const isStructuredListening = skill === "listening" && format !== "free_response";
-    const shouldLock = isStructuredListening
-      ? (attemptNumber ?? 1) >= 3
-      : true; // every other skill+format locks immediately
+    const shouldLock    = isStructuredListening ? (attemptNumber ?? 1) >= 3 : true;
+    const shouldAwardRp = isStructuredListening ? (attemptNumber ?? 1) === 1 : true;
 
     const rp = task.rpValue ?? 10;
 
-    if (shouldLock) {
+    if (shouldLock && shouldAwardRp) {
+      // Non-structured skills: lock + award RP in one step
       await prisma.dailySubmission.update({
         where: { id: submission.id },
         data: { isCompleted: true, submittedAt: new Date(), rpEarned: rp },
       });
-
       await prisma.rpEvent.create({
         data: { childId: child.id, dailySubmissionId: submission.id, delta: rp, reason: "daily_completion" },
       });
-
       await prisma.child.update({
         where: { id: child.id },
         data: { lastDailySubmissionAt: new Date() },
       });
-    } else {
-      // Intermediate attempt — save submittedAt for tracking but don't lock
+    } else if (shouldLock) {
+      // Structured listening attempt 3: lock only — RP already awarded at attempt 1
       await prisma.dailySubmission.update({
         where: { id: submission.id },
-        data: { submittedAt: new Date() },
+        data: { isCompleted: true },
+      });
+    } else if (shouldAwardRp) {
+      // Structured listening attempt 1: award RP + set submittedAt — but don't lock yet
+      await prisma.dailySubmission.update({
+        where: { id: submission.id },
+        data: { submittedAt: new Date(), rpEarned: rp },
+      });
+      await prisma.rpEvent.create({
+        data: { childId: child.id, dailySubmissionId: submission.id, delta: rp, reason: "daily_completion" },
+      });
+      await prisma.child.update({
+        where: { id: child.id },
+        data: { lastDailySubmissionAt: new Date() },
       });
     }
+    // Note: shouldLock=false + shouldAwardRp=false (attempt 2) never reaches the server —
+    // attempt 2 is scored entirely client-side. This branch is unreachable in normal flow.
 
     return NextResponse.json({
       ok: true,
       locked: shouldLock,
-      rpEarned: shouldLock ? rp : 0,
-      // Return scored answers so client can show correct/incorrect immediately
+      rpEarned: shouldAwardRp ? rp : 0,
       answersJson: answersJson ?? undefined,
     });
   } catch (e: unknown) {

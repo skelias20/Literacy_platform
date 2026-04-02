@@ -137,7 +137,7 @@ export async function GET(req: Request) {
         type: { not: "questions" },
         ...(levelFilter
           ? { OR: [{ level: levelFilter }, { level: null }] }
-          : { level: null }),
+          : {}),
       },
       select: {
         id: true,
@@ -153,7 +153,7 @@ export async function GET(req: Request) {
     const tasks = await prisma.dailyTask.findMany({
       where: {
         taskDate,
-        ...(levelFilter ? { level: levelFilter } : { level: null }),
+        ...(levelFilter ? { level: levelFilter } : {}),
       },
       select: {
         id: true,
