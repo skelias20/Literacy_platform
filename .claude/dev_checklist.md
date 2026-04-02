@@ -44,6 +44,34 @@
 
 ---
 
+### COMPLETED (Session X)
+
+#### Multi-session periodic assessments
+* Added `periodicSessionCount Int @default(1)` to `AssessmentConfig` and `periodicCycleNumber Int?` to `Assessment` (migration: `add_periodic_session_count_cycle`)
+* `trigger-periodic` now uses `periodicCycleNumber` to track re-evaluation cycles; each trigger always creates `sessionNumber: 1` of a new cycle
+* `submit/route` uses `periodicSessionCount` for periodic last-session logic; creates next periodic session within the same cycle (propagating `periodicCycleNumber`); child status stays `active` throughout
+* `student/assessment/route` returns `periodicSessionCount` as `totalSessions` for periodic; slot lookup uses `assessment.sessionNumber` directly (no longer hardcoded to 1)
+* Admin list (`/api/admin/assessments`) deduplicates periodic by `(childId, periodicCycleNumber)` — shows as soon as any session submitted, same as initial
+* Admin detail (`/api/admin/assessments/[id]`) scopes `allSessions` to same `periodicCycleNumber` for periodic
+* Config route GET/PUT handles `periodicSessionCount`; PUT validates it ≤ `initialSessionCount` (shared slots)
+* Admin config panel: new "Periodic sessions per re-evaluation" input; capped at `initialSessionCount`
+* Admin list cards: "Session X of Y — more sessions pending" badge shown for multi-session periodic (same pattern as initial)
+* Session tabs: "Student has not yet submitted this session." shown instead of "No artifacts" for unsubmitted sessions (both main panel and history)
+
+---
+
+### COMPLETED (Session IX)
+
+#### Assessment review UI (admin)
+* ISSUE-26: Pending list split into "Initial Placement" (blue) and "Periodic Re-evaluation" (indigo) sections with per-section counts
+* Type badge added to detail panel header — prominent colored label identifies assessment kind at a glance
+* Periodic review panel shows "Current level: X" above the level selector
+* Action label changes to "Update level…" for periodic (vs "Save" for initial)
+* Two-step confirmation for periodic level updates: amber callout showing "change [Student]'s level from [X] to [Y]" with Confirm / Cancel
+* History list kind badges aligned to same blue/indigo color scheme
+
+---
+
 ### COMPLETED (Session VIII)
 
 #### Admin student panel
@@ -92,7 +120,6 @@
 
 * **ISSUE-25:** Admin student status clarity — action hints per status, periodic assessment pending badge on active students, `lastDailySubmissionAt` staleness indicator in detail panel.
 
-* **ISSUE-26:** Differentiate initial vs periodic assessment review UI — type badge, "Update Level" vs "Assign Level" label, level-change confirmation step, split list sections.
 
 * Refresh-token flow — deferred
 * Redis-backed rate limiter — deferred

@@ -235,29 +235,3 @@ Admins must interpret status mentally and navigate elsewhere to take action. Thi
 
 ---
 
-## ISSUE-26: Admin assessment review UI does not distinguish initial from periodic assessments
-
-**Area:** Admin UI — assessment review panel (`/admin/assessments`)
-
-**Problem:**
-Initial assessments and periodic re-evaluations are different in purpose, allowed actions, and consequences:
-- Initial: determines level placement → assigns level → transitions student to `active`
-- Periodic: re-evaluates existing student → admin may update level → student stays `active`
-
-Currently the review UI presents both in a similar format. Admins must remember which type they are reviewing. There is no visual distinction, no contextual label, and no enforcement of which actions are available per type at the UI layer.
-
-**Specific gaps:**
-- No prominent label indicating "Initial Assessment" vs "Periodic Re-evaluation"
-- Assign-level action is gated to the last session tab (correct) but there is no explanation of why for periodic — which already has a level
-- If admin updates a level from periodic review, there is no confirmation step calling out the level change consequence
-- Assessment list (`/admin/assessments`) mixes both types — filtering exists but the default view is not clearly separated
-
-**Potential solution:**
-- Add a prominent type badge: "Initial Placement" (amber/orange) vs "Periodic Re-evaluation" (blue/indigo) on the review panel header and list cards
-- For periodic assessments: change the action label from "Assign Level" to "Update Level" and show the student's current level alongside the selector
-- Add a confirmation step when updating a level from a periodic review: "This will change [Student]'s level from [X] to [Y]. Confirm?"
-- Default the assessment list to two sections: "Initial — Pending Review" and "Periodic — Pending Review" rather than a flat mixed list
-
-**Priority:** Medium — important for operational correctness as periodic assessments are triggered more frequently.
-
----

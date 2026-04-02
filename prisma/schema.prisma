@@ -377,6 +377,10 @@ model Assessment {
   // Null for rows created before this field was added — those rows fall back to "foundational".
   lookupLevel LiteracyLevel?
 
+  // For periodic assessments only: which re-evaluation cycle this session belongs to (1, 2, 3...).
+  // sessionNumber within a cycle tracks the session within that cycle (1, 2, ..., periodicSessionCount).
+  periodicCycleNumber Int?
+
   triggeredByAdminId String?
   triggeredByAdmin   Admin?  @relation("AssessmentTriggeredByAdmin", fields: [triggeredByAdminId], references: [id], onDelete: SetNull)
 
@@ -437,14 +441,14 @@ model RpEvent {
 
 // Single-row table — always upsert, never insert a second row.
 // taskFormat removed — derived from listening slot question bank at assessment creation time.
-// periodicSessionCount removed — admin controls periodic frequency via trigger button.
 model AssessmentConfig {
-  id                  String   @id @default(uuid())
-  initialSessionCount Int      @default(1)
-  updatedByAdminId    String
-  updatedByAdmin      Admin    @relation(fields: [updatedByAdminId], references: [id], onDelete: Restrict)
-  updatedAt           DateTime @updatedAt
-  createdAt           DateTime @default(now())
+  id                   String   @id @default(uuid())
+  initialSessionCount  Int      @default(1)
+  periodicSessionCount Int      @default(1)
+  updatedByAdminId     String
+  updatedByAdmin       Admin    @relation(fields: [updatedByAdminId], references: [id], onDelete: Restrict)
+  updatedAt            DateTime @updatedAt
+  createdAt            DateTime @default(now())
 }
 
 model AdminAuditLog {

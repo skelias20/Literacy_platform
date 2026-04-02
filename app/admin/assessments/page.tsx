@@ -57,6 +57,7 @@ type HistoryRow = {
 type ConfigData = {
   id: string | null;
   initialSessionCount: number;
+  periodicSessionCount: number;
   updatedAt: string | null;
 };
 
@@ -95,6 +96,7 @@ export default function AdminAssessmentsPage() {
   const [listLoading, setListLoading]     = useState(true);
   const [pendingPeriodicCount, setPendingPeriodicCount] = useState(0);
   const [totalSessions, setTotalSessions] = useState(1);
+  const [periodicTotalSessions, setPeriodicTotalSessions] = useState(1);
 
   const [selectedId, setSelectedId]       = useState<string | null>(null);
   const [selectedRow, setSelectedRow]     = useState<Row | null>(null);
@@ -105,12 +107,15 @@ export default function AdminAssessmentsPage() {
   const [assignLevel, setAssignLevel] = useState<LiteracyLevel>("foundational");
   const [assigning, setAssigning]     = useState(false);
   const [assignMsg, setAssignMsg]     = useState<string | null>(null);
+  const [periodicConfirm, setPeriodicConfirm] = useState(false);
 
   const [config, setConfig]                 = useState<ConfigData | null>(null);
   const [configSessionCount, setConfigSessionCount] = useState(1);
   // savedSessionCount tracks the persisted value — used for the readiness grid display.
   // configSessionCount is the live input value that may not yet be saved.
   const [savedSessionCount, setSavedSessionCount]   = useState(1);
+  const [configPeriodicSessionCount, setConfigPeriodicSessionCount] = useState(1);
+  const [savedPeriodicSessionCount, setSavedPeriodicSessionCount]   = useState(1);
   const [completeness, setCompleteness]     = useState<Record<string, Record<string, number>>>({});
   const [missingSlots, setMissingSlots]     = useState<{ level: string; skill: string; sessionNumber: number }[]>([]);
   const [configSaving, setConfigSaving]     = useState(false);
@@ -168,6 +173,7 @@ export default function AdminAssessmentsPage() {
     setList(data.assessments ?? []);
     setPendingPeriodicCount(data.pendingPeriodicCount ?? 0);
     setTotalSessions(data.totalSessions ?? 1);
+    setPeriodicTotalSessions(data.periodicSessionCount ?? 1);
     setListLoading(false);
   }
 
@@ -180,6 +186,7 @@ export default function AdminAssessmentsPage() {
       setList(data.assessments ?? []);
       setPendingPeriodicCount(data.pendingPeriodicCount ?? 0);
       setTotalSessions(data.totalSessions ?? 1);
+      setPeriodicTotalSessions(data.periodicSessionCount ?? 1);
       setListLoading(false);
     };
     void run();
@@ -195,6 +202,8 @@ export default function AdminAssessmentsPage() {
       setConfig(data.config ?? null);
       setConfigSessionCount(data.config?.initialSessionCount ?? 1);
       setSavedSessionCount(data.config?.initialSessionCount ?? 1);
+      setConfigPeriodicSessionCount(data.config?.periodicSessionCount ?? 1);
+      setSavedPeriodicSessionCount(data.config?.periodicSessionCount ?? 1);
       setCompleteness(data.completeness ?? {});
       setMissingSlots(data.missingSlots ?? []);
       setConfigLoading(false);
@@ -221,6 +230,7 @@ export default function AdminAssessmentsPage() {
   async function openDetail(row: Row) {
     setSelectedId(row.id); setSelectedRow(row);
     setAllSessions([]); setAssignMsg(null); setDetailLoading(true);
+    setPeriodicConfirm(false);
     setAssignLevel((row.assignedLevel ?? row.child.level ?? "foundational") as LiteracyLevel);
     const res  = await adminFetch(`/api/admin/assessments/${row.id}`);
     const data = await res.json().catch(() => ({}));
@@ -259,7 +269,10 @@ export default function AdminAssessmentsPage() {
     const res  = await adminFetch("/api/admin/assessments/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ initialSessionCount: configSessionCount }),
+      body: JSON.stringify({
+        initialSessionCount: configSessionCount,
+        periodicSessionCount: configPeriodicSessionCount,
+      }),
     });
     const data = await res.json().catch(() => ({}));
     setConfigSaving(false);
@@ -270,6 +283,7 @@ export default function AdminAssessmentsPage() {
     }
     setConfig(data.config);
     setSavedSessionCount(data.config?.initialSessionCount ?? configSessionCount);
+    setSavedPeriodicSessionCount(data.config?.periodicSessionCount ?? configPeriodicSessionCount);
     setCompleteness(data.completeness ?? {});
     setMissingSlots(data.missingSlots ?? []);
     setConfigMsg("Configuration saved.");
@@ -441,6 +455,8 @@ export default function AdminAssessmentsPage() {
   const activeSessionData = allSessions.find((s) => s.sessionNumber === activeSession);
   const lastSessionNumber = allSessions.length > 0 ? Math.max(...allSessions.map((s) => s.sessionNumber)) : activeSession;
   const levelSlots        = slots.filter((s) => s.level === slotLevel);
+  // true only when every session has been submitted (none are pending)
+  const allSessionsSubmitted = allSessions.length > 0 && allSessions.every((s) => s.submittedAt !== null);
 
   function getSlot(skill: SkillType, sessionNumber: number) {
     return levelSlots.find((s) => s.skill === skill && s.sessionNumber === sessionNumber);
@@ -479,33 +495,73 @@ export default function AdminAssessmentsPage() {
           {!listLoading && list.length === 0 && (
             <p className="mt-3 text-sm text-gray-600">No assessments pending review.</p>
           )}
-          <div className="mt-2 space-y-2">
-            {list.map((a) => (
-              <button key={a.id} onClick={() => openDetail(a)}
-                className={`w-full rounded border p-3 text-left hover:bg-gray-50 ${selectedId === a.id ? "border-black bg-gray-50" : ""}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-sm">{a.child.childFirstName} {a.child.childLastName}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs ${a.kind === "periodic" ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"}`}>
-                    {KIND_LABELS[a.kind]}{a.kind === "periodic" && ` #${a.sessionNumber}`}
-                  </span>
-                </div>
-                <div className="mt-0.5 text-xs text-gray-500">
-                  Grade {a.child.grade} · Submitted {new Date(a.submittedAt).toLocaleDateString()}
-                </div>
-                {a.kind === "initial" && a.sessionNumber < totalSessions && (
-                  <div className="mt-0.5 text-xs text-amber-600 font-medium">
-                    Session {a.sessionNumber} of {totalSessions} — more sessions pending
+          {!listLoading && list.length > 0 && (() => {
+            const initialList  = list.filter((a) => a.kind === "initial");
+            const periodicList = list.filter((a) => a.kind === "periodic");
+            function renderCard(a: Row) {
+              return (
+                <button key={a.id} onClick={() => openDetail(a)}
+                  className={`w-full rounded border p-3 text-left hover:bg-gray-50 ${selectedId === a.id ? "border-black bg-gray-50" : ""}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-medium text-sm">{a.child.childFirstName} {a.child.childLastName}</span>
+                    {a.kind === "periodic" && (
+                      <span className="text-xs text-gray-400">#{a.sessionNumber}</span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 text-xs text-gray-500">
+                    Grade {a.child.grade} · Submitted {new Date(a.submittedAt).toLocaleDateString()}
+                  </div>
+                  {a.kind === "initial" && a.sessionNumber < totalSessions && (
+                    <div className="mt-0.5 text-xs text-amber-600 font-medium">
+                      Session {a.sessionNumber} of {totalSessions} — more sessions pending
+                    </div>
+                  )}
+                  {a.kind === "initial" && a.sessionNumber >= totalSessions && (
+                    <div className="mt-0.5 text-xs text-green-600 font-medium">
+                      All {totalSessions} session{totalSessions !== 1 ? "s" : ""} submitted — ready for level assignment
+                    </div>
+                  )}
+                  {a.kind === "periodic" && periodicTotalSessions > 1 && a.sessionNumber < periodicTotalSessions && (
+                    <div className="mt-0.5 text-xs text-amber-600 font-medium">
+                      Session {a.sessionNumber} of {periodicTotalSessions} — more sessions pending
+                    </div>
+                  )}
+                  {a.kind === "periodic" && periodicTotalSessions > 1 && a.sessionNumber >= periodicTotalSessions && (
+                    <div className="mt-0.5 text-xs text-green-600 font-medium">
+                      All {periodicTotalSessions} sessions submitted — ready for level update
+                    </div>
+                  )}
+                  {a.child.level && <div className="mt-0.5 text-xs text-gray-400 capitalize">Current level: {a.child.level}</div>}
+                </button>
+              );
+            }
+            return (
+              <div className="mt-3 space-y-4">
+                {initialList.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800">
+                        Initial Placement
+                      </span>
+                      <span className="text-xs text-gray-400">{initialList.length} pending</span>
+                    </div>
+                    <div className="space-y-2">{initialList.map(renderCard)}</div>
                   </div>
                 )}
-                {a.kind === "initial" && a.sessionNumber >= totalSessions && (
-                  <div className="mt-0.5 text-xs text-green-600 font-medium">
-                    All {totalSessions} session{totalSessions !== 1 ? "s" : ""} submitted — ready for level assignment
+                {periodicList.length > 0 && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-semibold text-indigo-800">
+                        Periodic Re-evaluation
+                      </span>
+                      <span className="text-xs text-gray-400">{periodicList.length} pending</span>
+                    </div>
+                    <div className="space-y-2">{periodicList.map(renderCard)}</div>
                   </div>
                 )}
-                {a.child.level && <div className="mt-0.5 text-xs text-gray-400 capitalize">Current level: {a.child.level}</div>}
-              </button>
-            ))}
-          </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* ── Middle: Artifacts + assign level ───────────────────────── */}
@@ -515,11 +571,22 @@ export default function AdminAssessmentsPage() {
           {selectedRow && (
             <div className="mt-3 space-y-3">
               <div className="rounded bg-gray-50 px-3 py-2 text-sm">
-                <p className="font-medium">{selectedRow.child.childFirstName} {selectedRow.child.childLastName}</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {KIND_LABELS[selectedRow.kind]}
-                  {selectedRow.kind === "periodic" && ` — Session ${selectedRow.sessionNumber}`}
-                  {selectedRow.child.level && ` · Current level: ${selectedRow.child.level}`}
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <p className="font-medium">{selectedRow.child.childFirstName} {selectedRow.child.childLastName}</p>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    selectedRow.kind === "periodic"
+                      ? "bg-indigo-100 text-indigo-800"
+                      : "bg-blue-100 text-blue-800"
+                  }`}>
+                    {selectedRow.kind === "periodic" ? "Periodic Re-evaluation" : "Initial Placement"}
+                  </span>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Grade {selectedRow.child.grade}
+                  {selectedRow.kind === "periodic" && ` · Session ${selectedRow.sessionNumber}`}
+                  {selectedRow.child.level && (
+                    <span className="ml-1 font-medium text-gray-600 capitalize">· Current level: {selectedRow.child.level}</span>
+                  )}
                 </p>
               </div>
               {detailLoading && <p className="text-sm text-gray-500">Loading...</p>}
@@ -535,65 +602,114 @@ export default function AdminAssessmentsPage() {
               )}
               {!detailLoading && activeSessionData && (
                 <div className="space-y-2">
-                  {activeSessionData.artifacts.length === 0 && <p className="text-sm text-gray-600">No artifacts for this session.</p>}
-                  {activeSessionData.artifacts.map((x) => (
-                    <div key={x.id} className="rounded border p-3">
-                      <p className="text-sm font-medium capitalize">{x.skill}</p>
-
-                      {/* Source content used in this assessment slot */}
-                      {x.contentItem && (
-                        <div className="mt-1 rounded bg-gray-50 px-2 py-1.5">
-                          <p className="text-xs font-medium text-gray-500">Source: {x.contentItem.title}</p>
-                          {x.contentItem.textBody && (
-                            <details className="mt-1">
-                              <summary className="cursor-pointer text-xs text-blue-600 underline">View source text</summary>
-                              <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border bg-white p-2 text-xs">{x.contentItem.textBody}</pre>
-                            </details>
-                          )}
-                          {x.contentItem.assetUrl && !x.contentItem.textBody && (
-                            <a
-                              className="mt-0.5 inline-block text-xs text-blue-600 underline"
-                              href={`/api/admin/files/${x.contentItem.assetUrl.split("/").pop()}`}
-                              target="_blank" rel="noreferrer"
-                            >
-                              Play / download source audio
-                            </a>
-                          )}
-                        </div>
-                      )}
-
-                      {/* Student's response */}
-                      {x.textBody && <pre className="mt-2 whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs">{x.textBody}</pre>}
-                      {x.fileId && !x.textBody && (
-                        <a className="mt-2 inline-block text-xs underline" href={`/api/admin/files/${x.fileId}`} target="_blank" rel="noreferrer">
-                          Download recording
-                        </a>
-                      )}
-                      {x.answersJson && !x.textBody && !x.fileId && <AnswersReview entries={x.answersJson} />}
-                      {!x.textBody && !x.fileId && !x.answersJson && <p className="mt-1 text-xs text-gray-400">(No response)</p>}
+                  {!activeSessionData.submittedAt ? (
+                    <div className="rounded border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-500">
+                      Student has not yet submitted this session.
                     </div>
-                  ))}
+                  ) : activeSessionData.artifacts.length === 0 ? (
+                    <p className="text-sm text-gray-600">No artifacts for this session.</p>
+                  ) : (
+                    activeSessionData.artifacts.map((x) => (
+                      <div key={x.id} className="rounded border p-3">
+                        <p className="text-sm font-medium capitalize">{x.skill}</p>
+
+                        {/* Source content used in this assessment slot */}
+                        {x.contentItem && (
+                          <div className="mt-1 rounded bg-gray-50 px-2 py-1.5">
+                            <p className="text-xs font-medium text-gray-500">Source: {x.contentItem.title}</p>
+                            {x.contentItem.textBody && (
+                              <details className="mt-1">
+                                <summary className="cursor-pointer text-xs text-blue-600 underline">View source text</summary>
+                                <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border bg-white p-2 text-xs">{x.contentItem.textBody}</pre>
+                              </details>
+                            )}
+                            {x.contentItem.assetUrl && !x.contentItem.textBody && (
+                              <a
+                                className="mt-0.5 inline-block text-xs text-blue-600 underline"
+                                href={`/api/admin/files/${x.contentItem.assetUrl.split("/").pop()}`}
+                                target="_blank" rel="noreferrer"
+                              >
+                                Play / download source audio
+                              </a>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Student's response */}
+                        {x.textBody && <pre className="mt-2 whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs">{x.textBody}</pre>}
+                        {x.fileId && !x.textBody && (
+                          <a className="mt-2 inline-block text-xs underline" href={`/api/admin/files/${x.fileId}`} target="_blank" rel="noreferrer">
+                            Download recording
+                          </a>
+                        )}
+                        {x.answersJson && !x.textBody && !x.fileId && <AnswersReview entries={x.answersJson} />}
+                        {!x.textBody && !x.fileId && !x.answersJson && <p className="mt-1 text-xs text-gray-400">(No response)</p>}
+                      </div>
+                    ))
+                  )}
                 </div>
               )}
-              {activeSession === lastSessionNumber && (selectedRow.kind === "periodic" || selectedRow.child.status === "pending_level_review") && (
+              {activeSession === lastSessionNumber && allSessionsSubmitted &&(selectedRow.kind === "periodic" || selectedRow.child.status === "pending_level_review") && (
                 <div className="rounded border p-3 mt-2">
                   <p className="text-sm font-medium">{selectedRow.kind === "periodic" ? "Update level" : "Assign level"}</p>
+                  {selectedRow.kind === "periodic" && selectedRow.child.level && (
+                    <p className="mt-1 text-xs text-gray-500">
+                      Current level: <span className="font-semibold capitalize text-gray-700">{selectedRow.child.level}</span>
+                    </p>
+                  )}
                   {isAlreadyAssigned && (
                     <p className="mt-1 text-xs text-green-700">
                       Already assigned: <span className="font-semibold capitalize">{selectedRow.assignedLevel}</span>
                     </p>
                   )}
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <select className="rounded border px-2 py-1 text-sm disabled:opacity-60"
-                      value={assignLevel} disabled={isAlreadyAssigned || assigning}
-                      onChange={(e) => setAssignLevel(e.target.value as LiteracyLevel)}>
-                      {LEVELS.map((l) => <option key={l} value={l} className="capitalize">{l}</option>)}
-                    </select>
-                    <button className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-60"
-                      onClick={submitAssignLevel} disabled={isAlreadyAssigned || assigning}>
-                      {assigning ? "Saving..." : isAlreadyAssigned ? "Already assigned" : "Save"}
-                    </button>
-                  </div>
+                  {!isAlreadyAssigned && !periodicConfirm && (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <select className="rounded border px-2 py-1 text-sm disabled:opacity-60"
+                        value={assignLevel} disabled={assigning}
+                        onChange={(e) => { setAssignLevel(e.target.value as LiteracyLevel); setPeriodicConfirm(false); }}>
+                        {LEVELS.map((l) => <option key={l} value={l} className="capitalize">{l}</option>)}
+                      </select>
+                      <button
+                        className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-60"
+                        disabled={assigning}
+                        onClick={() => {
+                          if (selectedRow.kind === "periodic") {
+                            setPeriodicConfirm(true);
+                          } else {
+                            submitAssignLevel();
+                          }
+                        }}>
+                        {assigning ? "Saving..." : selectedRow.kind === "periodic" ? "Update level…" : "Save"}
+                      </button>
+                    </div>
+                  )}
+                  {!isAlreadyAssigned && periodicConfirm && (
+                    <div className="mt-2 rounded border border-amber-200 bg-amber-50 p-3 space-y-2">
+                      <p className="text-sm text-amber-900 font-medium">Confirm level change</p>
+                      <p className="text-xs text-amber-800">
+                        This will change{" "}
+                        <span className="font-semibold">{selectedRow.child.childFirstName} {selectedRow.child.childLastName}</span>
+                        {"'s level from "}
+                        <span className="font-semibold capitalize">{selectedRow.child.level ?? "none"}</span>
+                        {" to "}
+                        <span className="font-semibold capitalize">{assignLevel}</span>.
+                      </p>
+                      <div className="flex gap-2">
+                        <button
+                          className="rounded bg-black px-3 py-1 text-sm text-white disabled:opacity-60"
+                          disabled={assigning}
+                          onClick={async () => { await submitAssignLevel(); setPeriodicConfirm(false); }}>
+                          {assigning ? "Saving..." : "Confirm"}
+                        </button>
+                        <button
+                          className="rounded border px-3 py-1 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+                          disabled={assigning}
+                          onClick={() => setPeriodicConfirm(false)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {assignMsg && (
                     <p className={`mt-2 text-xs ${assignMsg.includes("Failed") ? "text-red-600" : "text-green-700"}`}>{assignMsg}</p>
                   )}
@@ -624,11 +740,29 @@ export default function AdminAssessmentsPage() {
                     <input type="number" min={1} max={5}
                       className="w-16 rounded border px-2 py-1 text-sm"
                       value={configSessionCount}
-                      onChange={(e) => setConfigSessionCount(Math.max(1, Math.min(5, parseInt(e.target.value) || 1)))} />
+                      onChange={(e) => {
+                        const n = Math.max(1, Math.min(5, parseInt(e.target.value) || 1));
+                        setConfigSessionCount(n);
+                        // Keep periodic ≤ initial
+                        if (configPeriodicSessionCount > n) setConfigPeriodicSessionCount(n);
+                      }} />
                     <span className="text-xs text-gray-400">(max 5)</span>
                   </div>
                   <p className="mt-1 text-xs text-gray-400">
                     Students complete this many sessions before admin assigns a level. All sessions include all four skills.
+                  </p>
+                </div>
+                <div>
+                  <label className="text-sm font-medium">Periodic sessions per re-evaluation</label>
+                  <div className="mt-1 flex items-center gap-2">
+                    <input type="number" min={1} max={configSessionCount}
+                      className="w-16 rounded border px-2 py-1 text-sm"
+                      value={configPeriodicSessionCount}
+                      onChange={(e) => setConfigPeriodicSessionCount(Math.max(1, Math.min(configSessionCount, parseInt(e.target.value) || 1)))} />
+                    <span className="text-xs text-gray-400">(max {configSessionCount})</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Number of sessions a student completes during each periodic re-evaluation. Cannot exceed initial sessions.
                   </p>
                 </div>
                 <button onClick={saveConfig} disabled={configSaving}
@@ -919,8 +1053,8 @@ export default function AdminAssessmentsPage() {
                           <span className="font-medium text-sm">
                             {row.child.childFirstName} {row.child.childLastName}
                           </span>
-                          <span className={`rounded-full px-2 py-0.5 text-xs ${row.kind === "periodic" ? "bg-amber-100 text-amber-800" : "bg-blue-100 text-blue-800"}`}>
-                            {KIND_LABELS[row.kind]}{row.kind === "periodic" && ` #${row.sessionNumber}`}
+                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${row.kind === "periodic" ? "bg-indigo-100 text-indigo-800" : "bg-blue-100 text-blue-800"}`}>
+                            {row.kind === "periodic" ? "Periodic Re-evaluation" : "Initial Placement"}{row.kind === "periodic" && ` #${row.sessionNumber}`}
                           </span>
                           {row.assignedLevel && (
                             <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-800 capitalize">
@@ -954,49 +1088,54 @@ export default function AdminAssessmentsPage() {
                           )}
                           {!historyExpandedLoading && expandedSessionData && (
                             <div className="space-y-2">
-                              {expandedSessionData.artifacts.length === 0 && (
-                                <p className="text-sm text-gray-600">No artifacts for this session.</p>
-                              )}
-                              {expandedSessionData.artifacts.map((x) => (
-                                <div key={x.id} className="rounded border p-3">
-                                  <p className="text-sm font-medium capitalize">{x.skill}</p>
-                                  {x.contentItem && (
-                                    <div className="mt-1 rounded bg-gray-50 px-2 py-1.5">
-                                      <p className="text-xs font-medium text-gray-500">Source: {x.contentItem.title}</p>
-                                      {x.contentItem.textBody && (
-                                        <details className="mt-1">
-                                          <summary className="cursor-pointer text-xs text-blue-600 underline">View source text</summary>
-                                          <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border bg-white p-2 text-xs">{x.contentItem.textBody}</pre>
-                                        </details>
-                                      )}
-                                      {x.contentItem.assetUrl && !x.contentItem.textBody && (
-                                        <a
-                                          className="mt-0.5 inline-block text-xs text-blue-600 underline"
-                                          href={`/api/admin/files/${x.contentItem.assetUrl.split("/").pop()}`}
-                                          target="_blank" rel="noreferrer"
-                                        >
-                                          Play / download source audio
-                                        </a>
-                                      )}
-                                    </div>
-                                  )}
-                                  {x.textBody && (
-                                    <pre className="mt-2 whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs">{x.textBody}</pre>
-                                  )}
-                                  {x.fileId && !x.textBody && (
-                                    <a className="mt-2 inline-block text-xs underline"
-                                      href={`/api/admin/files/${x.fileId}`} target="_blank" rel="noreferrer">
-                                      Download recording
-                                    </a>
-                                  )}
-                                  {x.answersJson && !x.textBody && !x.fileId && (
-                                    <AnswersReview entries={x.answersJson} />
-                                  )}
-                                  {!x.textBody && !x.fileId && !x.answersJson && (
-                                    <p className="mt-1 text-xs text-gray-400">(No response)</p>
-                                  )}
+                              {!expandedSessionData.submittedAt ? (
+                                <div className="rounded border border-gray-200 bg-gray-50 px-3 py-3 text-sm text-gray-500">
+                                  Student has not yet submitted this session.
                                 </div>
-                              ))}
+                              ) : expandedSessionData.artifacts.length === 0 ? (
+                                <p className="text-sm text-gray-600">No artifacts for this session.</p>
+                              ) : (
+                                expandedSessionData.artifacts.map((x) => (
+                                  <div key={x.id} className="rounded border p-3">
+                                    <p className="text-sm font-medium capitalize">{x.skill}</p>
+                                    {x.contentItem && (
+                                      <div className="mt-1 rounded bg-gray-50 px-2 py-1.5">
+                                        <p className="text-xs font-medium text-gray-500">Source: {x.contentItem.title}</p>
+                                        {x.contentItem.textBody && (
+                                          <details className="mt-1">
+                                            <summary className="cursor-pointer text-xs text-blue-600 underline">View source text</summary>
+                                            <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded border bg-white p-2 text-xs">{x.contentItem.textBody}</pre>
+                                          </details>
+                                        )}
+                                        {x.contentItem.assetUrl && !x.contentItem.textBody && (
+                                          <a
+                                            className="mt-0.5 inline-block text-xs text-blue-600 underline"
+                                            href={`/api/admin/files/${x.contentItem.assetUrl.split("/").pop()}`}
+                                            target="_blank" rel="noreferrer"
+                                          >
+                                            Play / download source audio
+                                          </a>
+                                        )}
+                                      </div>
+                                    )}
+                                    {x.textBody && (
+                                      <pre className="mt-2 whitespace-pre-wrap rounded bg-gray-50 p-2 text-xs">{x.textBody}</pre>
+                                    )}
+                                    {x.fileId && !x.textBody && (
+                                      <a className="mt-2 inline-block text-xs underline"
+                                        href={`/api/admin/files/${x.fileId}`} target="_blank" rel="noreferrer">
+                                        Download recording
+                                      </a>
+                                    )}
+                                    {x.answersJson && !x.textBody && !x.fileId && (
+                                      <AnswersReview entries={x.answersJson} />
+                                    )}
+                                    {!x.textBody && !x.fileId && !x.answersJson && (
+                                      <p className="mt-1 text-xs text-gray-400">(No response)</p>
+                                    )}
+                                  </div>
+                                ))
+                              )}
                             </div>
                           )}
                         </div>

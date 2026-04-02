@@ -12,6 +12,7 @@ import { cookies } from "next/headers";
 import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, IdSchema } from "@/lib/schemas";
+import type { LiteracyLevel } from "@prisma/client";
 
 export const runtime = "nodejs";
 
@@ -105,13 +106,15 @@ export async function POST(req: Request) {
           continue;
         }
 
-        // Find next session number for this student's periodic assessments
-        const lastPeriodic = await tx.assessment.findFirst({
+        // Find the highest cycleNumber for this child's periodic assessments.
+        // periodicCycleNumber tracks which re-evaluation cycle (1st, 2nd, 3rd...).
+        // sessionNumber within a cycle starts at 1 and increments up to periodicSessionCount.
+        const lastCycle = await tx.assessment.findFirst({
           where: { childId: student.id, kind: "periodic" },
-          orderBy: { sessionNumber: "desc" },
-          select: { sessionNumber: true },
+          orderBy: { periodicCycleNumber: "desc" },
+          select: { periodicCycleNumber: true },
         });
-        const nextSession = (lastPeriodic?.sessionNumber ?? 0) + 1;
+        const nextCycleNumber = (lastCycle?.periodicCycleNumber ?? 0) + 1;
 
         // Mark previous periodic assessments as not latest
         await tx.assessment.updateMany({
@@ -119,16 +122,18 @@ export async function POST(req: Request) {
           data: { isLatest: false },
         });
 
+        // Create session 1 of the new cycle
         await tx.assessment.create({
           data: {
             childId: student.id,
             kind: "periodic",
-            sessionNumber: nextSession,
+            sessionNumber: 1,
+            periodicCycleNumber: nextCycleNumber,
             isLatest: true,
             triggeredByAdminId: adminId,
             // Snapshot the student's current level at trigger time so slot lookups
             // remain stable even if the admin later changes the student's level.
-            lookupLevel: student.level ?? undefined,
+            lookupLevel: (student.level ?? undefined) as LiteracyLevel | undefined,
           },
         });
 

@@ -24,6 +24,7 @@ const assessmentSelect = {
   id: true,
   kind: true,
   sessionNumber: true,
+  periodicCycleNumber: true,
   taskFormat: true,
   submittedAt: true,
   assignedLevel: true,
@@ -51,9 +52,10 @@ export async function GET(req: Request) {
 
   const config = await prisma.assessmentConfig.findFirst({
     orderBy: { createdAt: "asc" },
-    select: { initialSessionCount: true },
+    select: { initialSessionCount: true, periodicSessionCount: true },
   });
-  const initialSessionCount = config?.initialSessionCount ?? 1;
+  const initialSessionCount  = config?.initialSessionCount  ?? 1;
+  const periodicSessionCount = config?.periodicSessionCount ?? 1;
 
   // ── Initial assessments ───────────────────────────────────────────────
   // Show as soon as session 1 is submitted — admin shouldn't wait until all sessions done.
@@ -82,17 +84,29 @@ export async function GET(req: Request) {
   }
 
   // ── Periodic assessments ──────────────────────────────────────────────
-  const periodicAssessments = (kindFilter === "initial") ? [] : await prisma.assessment.findMany({
+  // With multi-session periodic, isLatest=true is the current in-progress session (may be unsubmitted).
+  // Show cycles where at least one session is submitted and no level has been assigned yet.
+  // Deduplicate: one entry per (childId, periodicCycleNumber) — show the highest submitted session per cycle.
+  const allSubmittedPeriodic = (kindFilter === "initial") ? [] : await prisma.assessment.findMany({
     where: {
       kind: "periodic",
       submittedAt: { not: null },
-      isLatest: true,
       assignedLevel: null,
-      child: { archivedAt: null },
+      child: { archivedAt: null, status: "active" },
     },
-    orderBy: { submittedAt: "desc" },
+    orderBy: { sessionNumber: "desc" },
     select: assessmentSelect,
   });
+
+  const seenCycles = new Set<string>();
+  const periodicAssessments: typeof allSubmittedPeriodic = [];
+  for (const a of allSubmittedPeriodic) {
+    const cycleKey = `${a.child.id}_${a.periodicCycleNumber ?? a.sessionNumber}`;
+    if (!seenCycles.has(cycleKey)) {
+      seenCycles.add(cycleKey);
+      periodicAssessments.push(a);
+    }
+  }
 
   // ── Combine and sort ──────────────────────────────────────────────────
   let assessments;
@@ -116,5 +130,5 @@ export async function GET(req: Request) {
     },
   });
 
-  return NextResponse.json({ assessments, pendingPeriodicCount, totalSessions: initialSessionCount });
+  return NextResponse.json({ assessments, pendingPeriodicCount, totalSessions: initialSessionCount, periodicSessionCount });
 }

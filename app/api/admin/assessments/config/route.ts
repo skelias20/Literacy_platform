@@ -15,7 +15,8 @@ const SKILLS = ["reading", "listening", "writing", "speaking"] as const;
 const MAX_SESSIONS = 5;
 
 const ConfigPutSchema = z.object({
-  initialSessionCount: z.number().int().min(1).max(MAX_SESSIONS),
+  initialSessionCount:  z.number().int().min(1).max(MAX_SESSIONS),
+  periodicSessionCount: z.number().int().min(1).max(MAX_SESSIONS),
 });
 
 async function requireAdmin(): Promise<string | null> {
@@ -74,16 +75,18 @@ export async function GET() {
   try {
     const config = await prisma.assessmentConfig.findFirst({
       orderBy: { createdAt: "asc" },
-      select: { id: true, initialSessionCount: true, updatedAt: true },
+      select: { id: true, initialSessionCount: true, periodicSessionCount: true, updatedAt: true },
     });
 
     const initialSessionCount = config?.initialSessionCount ?? 1;
+    const periodicSessionCount = config?.periodicSessionCount ?? 1;
     const { map, missingSlots } = await buildCompletenessMap(initialSessionCount);
 
     return NextResponse.json({
       config: {
         id: config?.id ?? null,
         initialSessionCount,
+        periodicSessionCount,
         updatedAt: config?.updatedAt ?? null,
       },
       completeness: map,
@@ -109,7 +112,15 @@ export async function PUT(req: Request) {
       "assessments/config PUT"
     );
     if (!parsed.ok) return parsed.response;
-    const { initialSessionCount } = parsed.data;
+    const { initialSessionCount, periodicSessionCount } = parsed.data;
+
+    // periodicSessionCount cannot exceed initialSessionCount — they share the same content slots.
+    if (periodicSessionCount > initialSessionCount) {
+      return NextResponse.json(
+        { error: "Periodic sessions per cycle cannot exceed the initial session count." },
+        { status: 400 }
+      );
+    }
 
     const existing = await prisma.assessmentConfig.findFirst({
       orderBy: { createdAt: "asc" },
@@ -135,13 +146,13 @@ export async function PUT(req: Request) {
     if (existing?.id) {
       config = await prisma.assessmentConfig.update({
         where: { id: existing.id },
-        data: { initialSessionCount, updatedByAdminId: adminId },
-        select: { id: true, initialSessionCount: true, updatedAt: true },
+        data: { initialSessionCount, periodicSessionCount, updatedByAdminId: adminId },
+        select: { id: true, initialSessionCount: true, periodicSessionCount: true, updatedAt: true },
       });
     } else {
       config = await prisma.assessmentConfig.create({
-        data: { initialSessionCount, updatedByAdminId: adminId },
-        select: { id: true, initialSessionCount: true, updatedAt: true },
+        data: { initialSessionCount, periodicSessionCount, updatedByAdminId: adminId },
+        select: { id: true, initialSessionCount: true, periodicSessionCount: true, updatedAt: true },
       });
     }
 

@@ -103,6 +103,7 @@ export async function POST(req: Request) {
       select: {
         id: true, childId: true, kind: true,
         submittedAt: true, taskFormat: true, sessionNumber: true,
+        periodicCycleNumber: true,
         lookupLevel: true,
         child: { select: { status: true, level: true } },
       },
@@ -120,8 +121,8 @@ export async function POST(req: Request) {
     const effectiveLevel = assessment.lookupLevel
       ?? (assessment.kind === "initial" ? "foundational" : (assessment.child.level ?? "foundational"));
 
-    // Periodic assessments track re-evaluation count in sessionNumber, but slots are always at session 1.
-    const slotSessionNumber = assessment.kind === "periodic" ? 1 : assessment.sessionNumber;
+    // sessionNumber maps directly to the content slot for both kinds.
+    const slotSessionNumber = assessment.sessionNumber;
 
     const format = assessment.taskFormat as TaskFormat;
     const isStructured = format === "mcq" || format === "msaq" || format === "fill_blank";
@@ -204,13 +205,15 @@ export async function POST(req: Request) {
 
     const config = await prisma.assessmentConfig.findFirst({
       orderBy: { createdAt: "asc" },
-      select: { initialSessionCount: true },
+      select: { initialSessionCount: true, periodicSessionCount: true },
     });
-    const initialSessionCount = config?.initialSessionCount ?? 1;
+    const initialSessionCount  = config?.initialSessionCount  ?? 1;
+    const periodicSessionCount = config?.periodicSessionCount ?? 1;
 
     const isLastSession =
-      assessment.kind === "periodic" ||
-      assessment.sessionNumber >= initialSessionCount;
+      assessment.kind === "initial"
+        ? assessment.sessionNumber >= initialSessionCount
+        : assessment.sessionNumber >= periodicSessionCount;
 
     // For next session creation: derive format from the NEXT session's listening slot.
     let nextSessionFormat: TaskFormat = "free_response";
@@ -289,24 +292,29 @@ export async function POST(req: Request) {
             data: { status: "pending_level_review" },
           });
         }
+        // Periodic last session: child stays active — no status change.
       } else {
         const nextSessionNumber = assessment.sessionNumber + 1;
 
         await tx.assessment.updateMany({
-          where: { childId, kind: "initial", isLatest: true },
+          where: { childId, kind: assessment.kind, isLatest: true },
           data: { isLatest: false },
         });
 
         await tx.assessment.create({
           data: {
             childId,
-            kind: "initial",
+            kind: assessment.kind,
             sessionNumber: nextSessionNumber,
             isLatest: true,
             startedAt: null,
             taskFormat: nextSessionFormat,
-            // Propagate lookupLevel so all sessions in the same assessment use the same level band.
+            // Propagate lookupLevel so all sessions in the same cycle use the same level band.
             lookupLevel: assessment.lookupLevel,
+            // Propagate cycleNumber for periodic so all sessions in the cycle are grouped together.
+            ...(assessment.kind === "periodic"
+              ? { periodicCycleNumber: assessment.periodicCycleNumber }
+              : {}),
           },
         });
       }

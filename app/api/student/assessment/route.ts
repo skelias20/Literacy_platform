@@ -79,9 +79,10 @@ export async function GET() {
 
   const config = await prisma.assessmentConfig.findFirst({
     orderBy: { createdAt: "asc" },
-    select: { initialSessionCount: true },
+    select: { initialSessionCount: true, periodicSessionCount: true },
   });
-  const initialSessionCount = config?.initialSessionCount ?? 1;
+  const initialSessionCount  = config?.initialSessionCount  ?? 1;
+  const periodicSessionCount = config?.periodicSessionCount ?? 1;
 
   // ── Find or create the open assessment row ────────────────────────────
   let assessment = await prisma.assessment.findFirst({
@@ -148,10 +149,9 @@ export async function GET() {
   const effectiveLevel: LiteracyLevel = assessment.lookupLevel
     ?? (kind === "initial" ? "foundational" : (child.level ?? "foundational"));
 
-  // Periodic assessments are single re-evaluation events.
-  // The sessionNumber on the Assessment row tracks how many times the student has been
-  // re-evaluated, but content slots are always configured at sessionNumber 1.
-  const slotSessionNumber = kind === "periodic" ? 1 : assessment.sessionNumber;
+  // sessionNumber maps directly to the content slot session number for both kinds.
+  // For periodic, session 1 of a cycle maps to slot session 1, session 2 maps to slot session 2, etc.
+  const slotSessionNumber = assessment.sessionNumber;
 
   // ── Re-derive taskFormat if currently free_response but slot now has a QB ────
   // Handles the case where an admin configures a question bank after the assessment
@@ -263,7 +263,7 @@ export async function GET() {
   return NextResponse.json({
     assessmentId: assessment.id,
     sessionNumber: assessment.sessionNumber,
-    totalSessions: initialSessionCount,
+    totalSessions: kind === "periodic" ? periodicSessionCount : initialSessionCount,
     taskFormat,
     content,
   });

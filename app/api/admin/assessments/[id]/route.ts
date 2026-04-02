@@ -40,17 +40,21 @@ export async function GET(
 
   // Load all sessions for this child + kind so admin sees the full picture.
   // For initial assessments this returns sessions 1..N.
-  // For periodic this typically returns just the one selected session,
-  // but the structure is consistent either way.
+  // For periodic: filter to the same cycle so admin sees sessions 1..periodicSessionCount
+  // of the current cycle, not all historical periodic evaluations.
   const allSessions = await prisma.assessment.findMany({
     where: {
       childId: assessment.childId,
       kind: assessment.kind,
+      ...(assessment.kind === "periodic" && assessment.periodicCycleNumber != null
+        ? { periodicCycleNumber: assessment.periodicCycleNumber }
+        : {}),
     },
     orderBy: { sessionNumber: "asc" },
     select: {
       id: true,
       sessionNumber: true,
+      periodicCycleNumber: true,
       isLatest: true,
       submittedAt: true,
       assignedLevel: true,
