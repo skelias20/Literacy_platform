@@ -48,22 +48,6 @@ Run an end-to-end test:
 # 2. System Constraints / Workflow Rules
 
 
-## ISSUE-17: Limit accepted registration grade to 1–8(If there is no better way)
-
-**Area:** Registration validation
-
-**Problem:**
-If grade is going to drive initial assessment content selection, the system must enforce a strict supported grade range. Allowing other grade values would break content mapping assumptions.
-
-**Potential solution:**
-Enforce on both frontend and backend:
-- Accepted grades: 1, 2, 3, 4, 5, 6, 7, 8
-- Show clear validation message if value is outside range
-
-**Priority:** Medium — important supporting rule for initial assessment architecture.
-
----
-
 # 3. Future Features / Architecture Decisions
 
 ## ISSUE-18: Payment event table is needed (WIthout removing createdAt in the current schema because that will cause a lot of problems)
@@ -207,31 +191,4 @@ ISSUE-20 (optional instructional video URL per task/assessment) is part of this 
 
 ---
 
-## ISSUE-25: Student status representation in the admin panel needs clarity
-
-**Area:** Admin UI — student list and detail panel
-
-**Problem:**
-The admin panel shows student status as a badge (e.g. "Pending Review", "Active") but does not communicate:
-- What the admin's expected next action is for each status
-- Whether the student is blocked and why
-- Whether a periodic assessment is currently pending for an active student
-
-Admins must interpret status mentally and navigate elsewhere to take action. This creates workflow friction, especially as the student count grows.
-
-**Specific gaps:**
-- No inline call-to-action on the student card or detail panel (e.g. "Assign level →", "Approve payment →")
-- No indicator that an active student currently has a pending periodic assessment triggered
-- No visual distinction between "active and progressing" vs "active but stuck / no recent submissions"
-- `lastDailySubmissionAt` is in the detail payload but not prominently surfaced
-
-**Potential solution:**
-- Add a context-aware action hint below the status badge in the detail panel: e.g. for `pending_level_review` → "Assessment submitted — assign a level to continue"
-- Show a secondary badge on active students if a periodic assessment is currently open (unsubmitted)
-- Surface `lastDailySubmissionAt` prominently in the detail panel with a staleness indicator (e.g. "> 7 days ago")
-- Consider a "needs attention" flag on list cards for statuses requiring admin action
-
-**Priority:** Medium — improves admin operational efficiency, important as student count scales.
-
----
 

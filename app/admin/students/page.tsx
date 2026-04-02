@@ -28,6 +28,7 @@ type StudentCard = {
   createdAt: string;
   archivedAt: string | null;
   totalRp: number;
+  hasOpenPeriodic: boolean;
   parent: { firstName: string; lastName: string };
 };
 
@@ -48,6 +49,7 @@ type StudentDetail = {
   lastDailySubmissionAt: string | null;
   archivedAt: string | null;
   totalRp: number;
+  hasOpenPeriodic: boolean;
   parent: {
     id: string;
     firstName: string;
@@ -79,6 +81,13 @@ const STATUS_COLORS: Record<Status, string> = {
   rejected:               "bg-red-50 text-red-700 border-red-200",
 };
 
+const STATUS_HINTS: Partial<Record<Status, string>> = {
+  pending_payment:        "Payment submitted — approve or reject to continue.",
+  approved_pending_login: "Credentials sent — waiting for student's first login.",
+  assessment_required:    "Student is completing their assessment.",
+  pending_level_review:   "Assessment complete — assign a level to continue.",
+};
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 function fmt(dateStr: string | null | undefined): string {
@@ -97,6 +106,12 @@ function age(dateStr: string): number {
     (now.getMonth() === dob.getMonth() && now.getDate() < dob.getDate())
   ) a--;
   return a;
+}
+
+function daysSince(dateStr: string | null): number | null {
+  if (!dateStr) return null;
+  const diff = Date.now() - new Date(dateStr).getTime();
+  return Math.floor(diff / (1000 * 60 * 60 * 24));
 }
 
 // ── Main page ─────────────────────────────────────────────────────────────
@@ -483,6 +498,11 @@ export default function AdminStudentsPage() {
                       {STATUS_LABELS[s.status]}
                     </span>
                   )}
+                  {s.status === "active" && !s.archivedAt && s.hasOpenPeriodic && (
+                    <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                      Periodic Pending
+                    </span>
+                  )}
                   <div className="flex items-center gap-2 text-xs text-gray-500">
                     {s.level && (
                       <span className="capitalize">{s.level}</span>
@@ -676,7 +696,17 @@ export default function AdminStudentsPage() {
                         {detail.level}
                       </span>
                     )}
+                    {detail.status === "active" && !detail.archivedAt && detail.hasOpenPeriodic && (
+                      <span className="rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+                        Periodic Assessment Pending
+                      </span>
+                    )}
                   </div>
+                  {STATUS_HINTS[detail.status] && (
+                    <p className="mt-2 text-xs text-gray-500 font-medium">
+                      → {STATUS_HINTS[detail.status]}
+                    </p>
+                  )}
                   <p className="mt-1 text-xs text-gray-400">
                     Status and level are controlled by the assessment workflow — not editable here.
                   </p>
@@ -752,7 +782,7 @@ export default function AdminStudentsPage() {
                           onChange={(e) => setEditForm((p) => ({ ...p, childLastName: e.target.value }))} />
                       </Field>
                       <Field label="Grade">
-                        <input className={inputCls} type="number" min={1} max={8}
+                        <input className={inputCls} type="number" min={1} max={12}
                           value={editForm.grade ?? ""}
                           onChange={(e) => setEditForm((p) => ({ ...p, grade: Number(e.target.value) }))} />
                       </Field>
@@ -794,7 +824,20 @@ export default function AdminStudentsPage() {
                       <Row label="Joined"       value={fmt(detail.createdAt)} />
                       <Row label="Credentials"  value={fmt(detail.credentialsCreatedAt)} />
                       <Row label="Level assigned" value={fmt(detail.levelAssignedAt)} />
-                      <Row label="Last activity"  value={fmt(detail.lastDailySubmissionAt)} />
+                      <div>
+                        <dt className="text-xs text-gray-400">Last daily task</dt>
+                        <dd className="text-sm font-medium mt-0.5 flex flex-wrap items-center gap-2">
+                          {fmt(detail.lastDailySubmissionAt)}
+                          {detail.status === "active" && (() => {
+                            const d = daysSince(detail.lastDailySubmissionAt);
+                            if (d === null)
+                              return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 font-medium">No submissions yet</span>;
+                            if (d >= 7)
+                              return <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs text-amber-700 font-medium">{d} days ago — may need follow-up</span>;
+                            return <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs text-green-700 font-medium">{d === 0 ? "Today" : `${d}d ago`}</span>;
+                          })()}
+                        </dd>
+                      </div>
                       <div className="sm:col-span-2">
                         <dt className="text-xs text-gray-400">Favourite Subjects</dt>
                         <dd className="mt-0.5 flex flex-wrap gap-1">

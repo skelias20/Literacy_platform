@@ -236,12 +236,12 @@ export default function RegisterPage() {
             </div>
           </div>
           <div className="mt-3">
-            <label className="text-sm font-medium">Grade (1–8)</label>
+            <label className="text-sm font-medium">Grade (1–12)</label>
             <input
               className="mt-1 w-full rounded border px-3 py-2"
               type="number"
               min={1}
-              max={8}
+              max={12}
               value={grade}
               onChange={(e) => setGrade(Number(e.target.value))}
               required

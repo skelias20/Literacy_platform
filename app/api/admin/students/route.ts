@@ -106,9 +106,21 @@ export async function GET(req: Request) {
     });
     const rpMap = new Map(rpGroups.map((r) => [r.childId, r._sum.delta ?? 0]));
 
+    // ── Open periodic assessments — batch, no N+1 ────────────────────────
+    const openPeriodic = await prisma.assessment.findMany({
+      where: {
+        childId: { in: children.map((c) => c.id) },
+        kind: "periodic",
+        submittedAt: null,
+      },
+      select: { childId: true },
+    });
+    const openPeriodicSet = new Set(openPeriodic.map((a) => a.childId));
+
     let students = children.map((c) => ({
       ...c,
       totalRp: rpMap.get(c.id) ?? 0,
+      hasOpenPeriodic: openPeriodicSet.has(c.id),
     }));
 
     // ── Post-merge sorts ──────────────────────────────────────────────────

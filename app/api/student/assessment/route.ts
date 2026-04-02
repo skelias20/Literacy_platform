@@ -32,8 +32,8 @@ function deriveFormatFromBank(textBody: string | null): "free_response" | "mcq" 
   return "free_response";
 }
 
-// Map registration grade (1–8) to a literacy level for initial assessment content lookup.
-// Grades 1–2 → foundational, 3–4 → functional, 5–6 → transitional, 7–8 → advanced.
+// Map registration grade (1–12) to a literacy level for initial assessment content lookup.
+// Grades 1–2 → foundational, 3–4 → functional, 5–6 → transitional, 7–12 → advanced.
 function gradeToLevel(grade: number): LiteracyLevel {
   if (grade <= 2) return "foundational";
   if (grade <= 4) return "functional";

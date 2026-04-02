@@ -114,11 +114,11 @@
 
 ### PENDING — NEAR TERM
 
-* **ISSUE-17:** Grade range enforcement (1–8) — frontend validation + backend Zod refinement on registration route.
+* ~~**ISSUE-17:**~~ Grade range enforcement — enforced 1–12; grades 7–12 map to `advanced` level. ✔
 
 * **ISSUE-24:** Mobile/PC responsiveness audit — student-facing pages first (dashboard, assessment, tasks, audio recorder). Admin panel: no horizontal overflow at tablet width minimum.
 
-* **ISSUE-25:** Admin student status clarity — action hints per status, periodic assessment pending badge on active students, `lastDailySubmissionAt` staleness indicator in detail panel.
+* ~~**ISSUE-25:**~~ Admin student status clarity — action hints per status, periodic pending badge (list + detail), `lastDailySubmissionAt` staleness indicator. ✔
 
 
 * Refresh-token flow — deferred

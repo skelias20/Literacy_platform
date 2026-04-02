@@ -28,7 +28,7 @@ const StudentPatchSchema = z.object({
   // Child corrections
   childFirstName: z.string().min(1).max(64).trim().optional(),
   childLastName:  z.string().min(1).max(64).trim().optional(),
-  grade:          z.number().int().min(1).max(8).optional(),
+  grade:          z.number().int().min(1).max(12).optional(),
   dateOfBirth:    z.coerce.date().optional(),
   subjects:       z.array(z.string().max(64)).max(8).optional(),
   // Parent corrections — all four fields validated if any are present
@@ -91,7 +91,12 @@ export async function GET(
     });
     const totalRp = rpAgg._sum.delta ?? 0;
 
-    return NextResponse.json({ child: { ...child, totalRp } });
+    // Open periodic assessment — any unsubmitted periodic session
+    const openPeriodicCount = await prisma.assessment.count({
+      where: { childId, kind: "periodic", submittedAt: null },
+    });
+
+    return NextResponse.json({ child: { ...child, totalRp, hasOpenPeriodic: openPeriodicCount > 0 } });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Server error";
     return NextResponse.json({ error: msg }, { status: 500 });

@@ -17,8 +17,8 @@ const RegistrationSchema = z.object({
   grade: z.coerce
     .number()
     .int()
-    .min(1, "Grade must be between 1 and 8.")
-    .max(8, "Grade must be between 1 and 8."),
+    .min(1, "Grade must be between 1 and 12.")
+    .max(12, "Grade must be between 1 and 12."),
   dateOfBirth: z.coerce.date({
     error: "Date of birth is invalid.",
   }),
