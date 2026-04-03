@@ -203,6 +203,7 @@ Detailed documentation is in `.claude/`:
 | `.claude/known-issues.md` | Open bugs from Session IV testing with potential solutions |
 | `.claude/dev_checklist.md` | Completed work, pending tasks, priorities, production TODOs |
 | `.claude/billing-subscription.md` | Full billing & subscription design — schema, routes, UI, access control, premium tier notes |
+| `.claude/payment-plans.md` | Future payment plans, subscription tiers (Standard/Premium), gateway integration (Stripe/PayMongo), multi-plan architecture, implementation sequence |
 
 ## 13. Tooling Efficiency Rules
 

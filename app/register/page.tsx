@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import Link from "next/link";
+import GuidanceVideo from "@/components/GuidanceVideo";
 type PaymentMethod = "transaction_id" | "receipt_upload";
 
 const MAX_RECEIPT_BYTES = 5 * 1024 * 1024; // 5MB
@@ -43,6 +44,20 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
+  const [guidanceVideoUrl, setGuidanceVideoUrl] = useState<string | null>(null);
+
+  // ── Fetch guidance video (no auth — public endpoint) ──────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const res = await fetch("/api/page-videos/registration");
+      const data = await res.json().catch(() => ({})) as { videoUrl?: string | null };
+      if (!cancelled) setGuidanceVideoUrl(data.videoUrl ?? null);
+    };
+    run().catch(() => { /* non-critical — video is optional */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Step 1+2+3: presign → R2 PUT → confirm ──────────────────────────────
   async function uploadReceipt(file: File): Promise<string | null> {
@@ -201,6 +216,8 @@ export default function RegisterPage() {
   return (
     <main className="min-h-screen p-10">
       <h1 className="text-3xl font-bold">Register</h1>
+
+      {guidanceVideoUrl && <GuidanceVideo videoUrl={guidanceVideoUrl} />}
 
       <div className="mt-4 rounded border p-4">
         <p className="font-medium">Bank Details (Demo Placeholder)</p>

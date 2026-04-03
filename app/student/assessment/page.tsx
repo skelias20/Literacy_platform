@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { studentFetch } from "@/lib/fetchWithAuth";
 import { countWords } from "@/lib/wordCount";
 import UnknownWordSaver from "@/components/UnknownWordSaver";
+import GuidanceVideo from "@/components/GuidanceVideo";
 
 type Skill      = "reading" | "listening" | "writing" | "speaking";
 type TaskFormat = "free_response" | "mcq" | "msaq" | "fill_blank";
@@ -74,6 +75,20 @@ export default function StudentAssessmentPage() {
   const [listeningFree,      setListeningFree]      = useState("");
   const [writingText,        setWritingText]         = useState("");
   const [structuredAnswers,  setStructuredAnswers]   = useState<Record<string, string | string[]>>({});
+
+  const [guidanceVideoUrl, setGuidanceVideoUrl] = useState<string | null>(null);
+
+  // ── Fetch guidance video (no auth — public endpoint) ──────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const res = await fetch("/api/page-videos/assessment");
+      const data = await res.json().catch(() => ({})) as { videoUrl?: string | null };
+      if (!cancelled) setGuidanceVideoUrl(data.videoUrl ?? null);
+    };
+    run().catch(() => { /* non-critical — video is optional */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Load ──────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -409,6 +424,8 @@ export default function StudentAssessmentPage() {
       <p className="mt-2 text-sm text-gray-600">
         Complete all four sections below. Your responses will be reviewed by your teacher.
       </p>
+
+      {guidanceVideoUrl && <GuidanceVideo videoUrl={guidanceVideoUrl} />}
 
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
 

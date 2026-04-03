@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 import { verifyStudentJwt } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import LogoutButton from "./LogoutButton";
+import GuidanceVideo from "@/components/GuidanceVideo";
 
 function startOfTodayUtc(): Date {
   const now = new Date();
@@ -35,6 +36,12 @@ export default async function StudentHomePage() {
   if (!child) {
     return <main className="p-10"><p>Account not found.</p></main>;
   }
+
+  const dashboardVideoRow = await prisma.pageGuidanceVideo.findUnique({
+    where: { pageKey: "dashboard" },
+    select: { videoUrl: true },
+  });
+  const dashboardVideo = dashboardVideoRow?.videoUrl ?? null;
 
   const today = startOfTodayUtc();
   let todaysTasks: {
@@ -185,6 +192,8 @@ export default async function StudentHomePage() {
         <h1 className="text-3xl font-bold">Student Dashboard</h1>
         <LogoutButton />
       </div>
+
+      {dashboardVideo && <GuidanceVideo videoUrl={dashboardVideo} />}
 
       <div className="mt-4 rounded border p-4">
         <p className="font-medium">

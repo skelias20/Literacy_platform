@@ -7,6 +7,7 @@ import { useParams } from "next/navigation";
 import { studentFetch } from "@/lib/fetchWithAuth";
 import { countWords } from "@/lib/wordCount";
 import UnknownWordSaver from "@/components/UnknownWordSaver";
+import GuidanceVideo from "@/components/GuidanceVideo";
 
 type SkillType  = "reading" | "listening" | "writing" | "speaking";
 type TaskFormat = "free_response" | "mcq" | "msaq" | "fill_blank";
@@ -73,6 +74,20 @@ export default function StudentDailyTaskPage() {
   const chunksRef        = useRef<BlobPart[]>([]);
   const timerRef         = useRef<ReturnType<typeof setInterval> | null>(null);
   const [elapsed, setElapsed]             = useState(0);
+
+  const [guidanceVideoUrl, setGuidanceVideoUrl] = useState<string | null>(null);
+
+  // ── Fetch guidance video (no auth — public endpoint) ──────────────────
+  useEffect(() => {
+    let cancelled = false;
+    const run = async () => {
+      const res = await fetch("/api/page-videos/task");
+      const data = await res.json().catch(() => ({})) as { videoUrl?: string | null };
+      if (!cancelled) setGuidanceVideoUrl(data.videoUrl ?? null);
+    };
+    run().catch(() => { /* non-critical — video is optional */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // ── Load ─────────────────────────────────────────────────────────────
   async function load(id: string) {
@@ -397,6 +412,8 @@ export default function StudentDailyTaskPage() {
         </div>
         <Link className="underline" href="/student">Back to dashboard</Link>
       </div>
+
+      {guidanceVideoUrl && <GuidanceVideo videoUrl={guidanceVideoUrl} />}
 
       {err && <p className="mt-3 text-sm text-red-600">{err}</p>}
 

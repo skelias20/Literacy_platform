@@ -51,6 +51,9 @@ export default async function AdminHomePage() {
 <Link className="underline" href="/admin/subscriptions">
   Subscriptions
 </Link>
+<Link className="underline" href="/admin/page-videos">
+  Page Guidance Videos
+</Link>
 </div>
     </main>
   );
