@@ -202,6 +202,7 @@ Detailed documentation is in `.claude/`:
 | `.claude/state-machine.md` | Full status machine, all transitions, rules |
 | `.claude/known-issues.md` | Open bugs from Session IV testing with potential solutions |
 | `.claude/dev_checklist.md` | Completed work, pending tasks, priorities, production TODOs |
+| `.claude/billing-subscription.md` | Full billing & subscription design — schema, routes, UI, access control, premium tier notes |
 
 ## 13. Tooling Efficiency Rules
 

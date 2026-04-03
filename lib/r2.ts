@@ -36,6 +36,7 @@ const PUBLIC_URL = mustGetEnv("R2_PUBLIC_URL");
 
 export type UploadContext =
   | "receipt"
+  | "renewal_receipt"
   | "assessment_audio"
   | "daily_audio"
   | "admin_content";
@@ -47,6 +48,10 @@ type ConstraintMap = {
 
 export const UPLOAD_CONSTRAINTS: Record<UploadContext, ConstraintMap> = {
   receipt: {
+    allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "application/pdf"],
+    maxBytes: 5 * 1024 * 1024,
+  },
+  renewal_receipt: {
     allowedMimeTypes: ["image/jpeg", "image/png", "image/webp", "application/pdf"],
     maxBytes: 5 * 1024 * 1024,
   },
@@ -98,6 +103,9 @@ export function generateR2Key(params: {
       return childId
         ? `receipts/${childId}/${fileId}.${ext}`
         : `temp/${fileId}.${ext}`;
+    case "renewal_receipt":
+      // Student is always authenticated for renewals — childId is always available.
+      return `renewals/${childId}/${fileId}.${ext}`;
     case "assessment_audio":
       return `assessments/${childId}/${skill}/${fileId}.${ext}`;
     case "daily_audio":

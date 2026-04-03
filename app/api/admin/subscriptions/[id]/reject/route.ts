@@ -1,3 +1,8 @@
+// app/api/admin/subscriptions/[id]/reject/route.ts
+// POST /api/admin/subscriptions/[id]/reject
+// Rejects a pending RenewalPayment. Does NOT touch any Subscription rows or
+// Child.subscriptionExpiresAt — rejection leaves billing state unchanged.
+
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { cookies } from "next/headers";
@@ -29,23 +34,22 @@ export async function POST(
 
     const { id } = await ctx.params;
 
-    const parsed = parseBody(RejectSchema, await req.json().catch(() => ({})), "payments/reject");
+    const parsed = parseBody(RejectSchema, await req.json().catch(() => ({})), "subscriptions/reject");
     if (!parsed.ok) return parsed.response;
     const { reason } = parsed.data;
 
-    const payment = await prisma.payment.findUnique({
+    const renewal = await prisma.renewalPayment.findUnique({
       where: { id },
-      select: { id: true, status: true, childId: true, method: true, transactionId: true },
+      select: { id: true, childId: true, status: true, method: true, transactionId: true },
     });
 
-    if (!payment) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    if (payment.status !== "pending") {
-      return NextResponse.json({ error: "Payment is not pending" }, { status: 400 });
+    if (!renewal) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (renewal.status !== "pending") {
+      return NextResponse.json({ error: "Renewal is not pending" }, { status: 400 });
     }
 
     await prisma.$transaction(async (tx) => {
-      await tx.payment.update({
+      await tx.renewalPayment.update({
         where: { id },
         data: {
           status: "rejected",
@@ -54,30 +58,22 @@ export async function POST(
         },
       });
 
-      await tx.child.update({
-        where: { id: payment.childId },
-        data: { status: "rejected" },
-      });
-
       await tx.adminAuditLog.create({
         data: {
           adminId,
-          action: "PAYMENT_REJECTED",
-          targetPaymentId: id,
-          targetChildId: payment.childId,
-          metadata: { reason: reason || null, method: payment.method },
+          action: "RENEWAL_REJECTED",
+          targetChildId: renewal.childId,
+          metadata: { renewalPaymentId: id, reason: reason || null },
         },
       });
 
       await tx.paymentEvent.create({
         data: {
-          childId: payment.childId,
-          paymentId: id,
-          eventType: "PAYMENT_REJECTED",
-          statusBefore: "pending_payment",
-          statusAfter: "rejected",
-          method: payment.method,
-          reference: payment.transactionId ?? null,
+          childId: renewal.childId,
+          renewalPaymentId: id,
+          eventType: "RENEWAL_REJECTED",
+          method: renewal.method,
+          reference: renewal.transactionId ?? null,
           notes: reason || null,
           adminId,
         },

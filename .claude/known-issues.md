@@ -50,53 +50,10 @@ Run an end-to-end test:
 
 # 3. Future Features / Architecture Decisions
 
-## ISSUE-18: Payment event table is needed (WIthout removing createdAt in the current schema because that will cause a lot of problems)
+## ISSUE-19: Monthly subscription renewal — IMPLEMENTED ✔
 
-**Area:** Payments / finance / audit trail
-
-**Problem:**
-A dedicated payment event table is needed to track payment-related activity. This will be useful for: financial reporting, reconciliation, refund windows, SLA tracking, dispute resolution, and payment analytics.
-
-**Potential solution:**
-Introduce a `PaymentEvent`-style table with fields such as:
-- `id`
-- `childId` or `registrationId`
-- `eventType`
-- `statusBefore`
-- `statusAfter`
-- `amount`
-- `currency`
-- `paymentMethod`
-- `reference`
-- `notes`
-- `createdAt`
-- `createdBy`
-
-Keep it append-only where possible.
-
-**Priority:** Planned architecture item.
-
----
-
-## ISSUE-19: Monthly fee / subscription renewal model is not designed yet
-
-**Area:** Billing / product lifecycle
-
-**Problem:**
-The system currently handles registration/payment approval, but long-term monthly subscription renewal logic has not been designed.
-
-**Potential solution:**
-Decide:
-- Renewal cycle
-- Grace period
-- Expired account behavior
-- Renewal reminder flow
-- Payment failure handling
-- Whether access locks immediately or after a buffer period
-
-This should be designed before production monetization.
-
-**Priority:** Planned business logic item.
+**Implemented in Session XI.** See `.claude/billing-subscription.md` for full spec.
+Migration: `add_billing_subscription` (applied). Data backfill included in migration SQL.
 
 ---
 

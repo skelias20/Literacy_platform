@@ -69,7 +69,9 @@ export async function GET(
         updatedAt:            true,
         credentialsCreatedAt: true,
         levelAssignedAt:      true,
-        lastDailySubmissionAt: true,
+        lastDailySubmissionAt:  true,
+        archivedAt:             true,
+        subscriptionExpiresAt:  true,
         parent: {
           select: {
             id:        true,

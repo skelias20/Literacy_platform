@@ -197,6 +197,20 @@ export async function POST(req: Request) {
         },
       });
 
+      await tx.paymentEvent.create({
+        data: {
+          childId:     child.id,
+          paymentId:   payment.id,
+          eventType:   "PAYMENT_SUBMITTED",
+          statusBefore: "pending_payment",
+          statusAfter:  "pending_payment",
+          method:      data.paymentMethod,
+          reference:   data.paymentMethod === "transaction_id"
+            ? data.transactionId ?? null
+            : null,
+        },
+      });
+
       return { child, payment };
     });
 

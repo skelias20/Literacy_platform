@@ -19,6 +19,7 @@ export const runtime = "nodejs";
 // ── Presign request schema ────────────────────────────────────────────────
 const VALID_CONTEXTS = [
   "receipt",
+  "renewal_receipt",
   "assessment_audio",
   "daily_audio",
   "admin_content",
@@ -81,7 +82,7 @@ export async function POST(req: Request) {
     diag.hasAdminToken   = !!adminToken;
     diag.hasStudentToken = !!studentToken;
 
-    const wantsStudent = body.context === "assessment_audio" || body.context === "daily_audio";
+    const wantsStudent = body.context === "assessment_audio" || body.context === "daily_audio" || body.context === "renewal_receipt";
     const wantsAdmin   = body.context === "admin_content";
     diag.wantsStudent = wantsStudent;
     diag.wantsAdmin   = wantsAdmin;
@@ -129,7 +130,8 @@ export async function POST(req: Request) {
     diag.uploaderId   = uploaderId ? "SET" : null;
     diag.uploaderType = uploaderType;
 
-    // Receipt uploads come from unauthenticated registration flow
+    // Receipt uploads come from unauthenticated registration flow.
+    // renewal_receipt and all other contexts require auth.
     const isRegistrationReceipt = body.context === "receipt";
     if (!isRegistrationReceipt && !uploaderId) {
       return deny(401, "Unauthorized");
@@ -140,10 +142,10 @@ export async function POST(req: Request) {
       return deny(403, "Forbidden: admin_content requires admin");
     }
     if (
-      (body.context === "assessment_audio" || body.context === "daily_audio") &&
+      (body.context === "assessment_audio" || body.context === "daily_audio" || body.context === "renewal_receipt") &&
       uploaderType !== "student"
     ) {
-      return deny(403, "Forbidden: assessment_audio/daily_audio requires student");
+      return deny(403, "Forbidden: this context requires a student account");
     }
 
     // ── File constraints (size + MIME via existing validateUpload) ────────

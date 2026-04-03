@@ -31,6 +31,15 @@ enum PaymentStatus {
   rejected
 }
 
+enum PaymentEventType {
+  PAYMENT_SUBMITTED
+  PAYMENT_APPROVED
+  PAYMENT_REJECTED
+  RENEWAL_SUBMITTED
+  RENEWAL_APPROVED
+  RENEWAL_REJECTED
+}
+
 enum LiteracyLevel {
   foundational
   functional
@@ -73,6 +82,15 @@ enum AuditAction {
   PROFILE_CHANGE_REQUESTED
   PROFILE_CHANGE_APPROVED
   PROFILE_CHANGE_REJECTED
+  RENEWAL_APPROVED
+  RENEWAL_REJECTED
+  SUBSCRIPTION_OVERRIDDEN
+}
+
+enum RenewalPaymentStatus {
+  pending
+  approved
+  rejected
 }
 
 enum ProfileChangeRequestStatus {
@@ -121,6 +139,9 @@ model Admin {
   assessmentConfigs             AssessmentConfig[]
   assessmentDefaultsCreated     AssessmentDefaultContent[] @relation("AssessmentDefaultsCreatedBy")
   reviewedProfileChanges        ProfileChangeRequest[]
+  paymentEvents                 PaymentEvent[]             @relation("PaymentEventAdmin")
+  billingConfigs                BillingConfig[]
+  reviewedRenewals              RenewalPayment[]           @relation("RenewalReviewedByAdmin")
 }
 
 model Parent {
@@ -167,10 +188,15 @@ model Child {
   lastDailySubmissionAt DateTime?
   archivedAt            DateTime?
 
+  // Billing — denormalized cache of the latest Subscription.periodEnd for fast access checks.
+  // null = grandfathered / pre-billing / admin override → treat as valid indefinitely.
+  subscriptionExpiresAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   payment               Payment?
+  paymentEvents         PaymentEvent[]
   assessments           Assessment[]
   dailySubmissions      DailySubmission[]
   rpEvents              RpEvent[]
@@ -178,6 +204,8 @@ model Child {
   auditLogsTargeted     AdminAuditLog[]        @relation("AuditTargetChild")
   unknownWords          UnknownWord[]
   profileChangeRequests ProfileChangeRequest[]
+  subscriptions         Subscription[]
+  renewalPayments       RenewalPayment[]
 
   @@index([status])
   @@index([parentId])
@@ -209,6 +237,7 @@ model File {
   uploadedByChild   Child?  @relation("FilesUploadedByChild", fields: [uploadedByChildId], references: [id], onDelete: SetNull)
 
   paymentReceiptFor   Payment?                  @relation("PaymentReceiptFile")
+  renewalReceiptFor   RenewalPayment?           @relation("RenewalReceiptFile")
   contentItems        ContentItem[]
   assessmentArtifacts AssessmentArtifact[]
   dailyArtifacts      DailySubmissionArtifact[]
@@ -236,8 +265,33 @@ model Payment {
   reviewedAt        DateTime?
   createdAt DateTime @default(now())
   auditLogsTargeted AdminAuditLog[] @relation("AuditTargetPayment")
+  events            PaymentEvent[]
 
   @@index([status])
+}
+
+model PaymentEvent {
+  id               String           @id @default(uuid())
+  childId          String
+  child            Child            @relation(fields: [childId], references: [id], onDelete: Cascade)
+  paymentId        String?
+  payment          Payment?         @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  renewalPaymentId String?
+  renewalPayment   RenewalPayment?  @relation(fields: [renewalPaymentId], references: [id], onDelete: SetNull)
+  eventType        PaymentEventType
+  statusBefore     String?
+  statusAfter      String?
+  method           String?
+  reference        String?
+  notes            String?
+  adminId          String?
+  admin            Admin?           @relation("PaymentEventAdmin", fields: [adminId], references: [id], onDelete: SetNull)
+  createdAt        DateTime         @default(now())
+
+  @@index([childId])
+  @@index([paymentId])
+  @@index([renewalPaymentId])
+  @@index([createdAt])
 }
 
 model ContentItem {
@@ -533,4 +587,63 @@ model UnknownWord {
 
   @@unique([childId, word])
   @@index([childId, createdAt])
+}
+
+// ─── Billing & Subscription ───────────────────────────────────────────────────
+
+// Single-row config table — always upsert, never insert a second row.
+// Mirrors the AssessmentConfig pattern.
+model BillingConfig {
+  id                String   @id @default(uuid())
+  cycleDays         Int      @default(30)   // subscription period length in days
+  gracePeriodDays   Int      @default(7)    // days after expiry before hard lock
+  renewalWindowDays Int      @default(7)    // days before expiry when Renew button activates
+  monthlyFee        Decimal? @db.Decimal(10, 2) // display value shown to student (not enforced)
+  currency          String   @default("USD")
+  updatedByAdminId  String
+  updatedByAdmin    Admin    @relation(fields: [updatedByAdminId], references: [id], onDelete: Restrict)
+  updatedAt         DateTime @updatedAt
+  createdAt         DateTime @default(now())
+}
+
+// Append-only subscription history — one row per billing period.
+// Never updated after creation. periodStart of a renewal = periodEnd of the previous period.
+model Subscription {
+  id               String          @id @default(uuid())
+  childId          String
+  child            Child           @relation(fields: [childId], references: [id], onDelete: Cascade)
+  periodStart      DateTime
+  periodEnd        DateTime
+  // null for the first (registration-derived) period. Set when created by renewal approval.
+  renewalPaymentId String?         @unique
+  renewalPayment   RenewalPayment? @relation(fields: [renewalPaymentId], references: [id], onDelete: SetNull)
+  createdAt        DateTime        @default(now())
+
+  @@index([childId, periodEnd])
+  @@index([periodEnd])
+}
+
+// Renewal payment submitted by the student — separate from registration Payment.
+// Each approved renewal creates one Subscription row and updates Child.subscriptionExpiresAt.
+// Only one pending renewal per child at a time — enforced at the API layer.
+model RenewalPayment {
+  id                String               @id @default(uuid())
+  childId           String
+  child             Child                @relation(fields: [childId], references: [id], onDelete: Cascade)
+  method            PaymentMethod
+  status            RenewalPaymentStatus @default(pending)
+  transactionId     String?
+  receiptFileId     String?              @unique
+  receiptFile       File?                @relation("RenewalReceiptFile", fields: [receiptFileId], references: [id], onDelete: SetNull)
+  reviewedByAdminId String?
+  reviewedByAdmin   Admin?               @relation("RenewalReviewedByAdmin", fields: [reviewedByAdminId], references: [id], onDelete: SetNull)
+  reviewedAt        DateTime?
+  createdAt         DateTime             @default(now())
+
+  subscription  Subscription?
+  paymentEvents PaymentEvent[]
+
+  @@index([childId])
+  @@index([status])
+  @@index([createdAt])
 }

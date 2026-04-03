@@ -48,6 +48,7 @@ type StudentDetail = {
   levelAssignedAt: string | null;
   lastDailySubmissionAt: string | null;
   archivedAt: string | null;
+  subscriptionExpiresAt: string | null;
   totalRp: number;
   hasOpenPeriodic: boolean;
   parent: {
@@ -166,6 +167,13 @@ export default function AdminStudentsPage() {
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [triggerResult, setTriggerResult]   = useState<{ ok: boolean; skipped: boolean; msg: string } | null>(null);
 
+  // Subscription override state
+  const [subOverrideOpen, setSubOverrideOpen]     = useState(false);
+  const [subOverrideDate, setSubOverrideDate]     = useState("");
+  const [subOverrideReason, setSubOverrideReason] = useState("");
+  const [subOverrideLoading, setSubOverrideLoading] = useState(false);
+  const [subOverrideMsg, setSubOverrideMsg]         = useState<string | null>(null);
+
   // ── Load list ───────────────────────────────────────────────────────────
   useEffect(() => {
     let cancelled = false;
@@ -209,6 +217,10 @@ export default function AdminStudentsPage() {
     setTriggerConfirm(false);
     setTriggerLoading(false);
     setTriggerResult(null);
+    setSubOverrideOpen(false);
+    setSubOverrideDate("");
+    setSubOverrideReason("");
+    setSubOverrideMsg(null);
     setDetailLoading(true);
 
     const res = await adminFetch(`/api/admin/students/${id}`);
@@ -380,6 +392,30 @@ export default function AdminStudentsPage() {
       skipped: res.ok && data.triggered === 0 && data.skipped > 0,
       msg: res.ok ? data.message : (data.error ?? "Failed to trigger assessment."),
     });
+  }
+
+  async function handleSubscriptionOverride() {
+    if (!detail) return;
+    setSubOverrideLoading(true);
+    setSubOverrideMsg(null);
+    // Empty date string → null (grandfather)
+    const expiresAt = subOverrideDate ? new Date(subOverrideDate).toISOString() : null;
+    const res = await adminFetch(`/api/admin/students/${detail.id}/subscription`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subscriptionExpiresAt: expiresAt, reason: subOverrideReason }),
+    });
+    const data = await res.json().catch(() => ({}));
+    setSubOverrideLoading(false);
+    if (!res.ok) {
+      setSubOverrideMsg(data.error ?? "Override failed.");
+      return;
+    }
+    setSubOverrideMsg("Subscription expiry updated.");
+    setSubOverrideOpen(false);
+    setSubOverrideDate("");
+    setSubOverrideReason("");
+    await openDetail(detail.id);
   }
 
   function toggleSort(field: typeof sort) {
@@ -761,6 +797,78 @@ export default function AdminStudentsPage() {
                         className="rounded border border-orange-300 px-3 py-1.5 text-sm text-orange-700 hover:bg-orange-50"
                       >
                         Trigger Periodic Assessment
+                      </button>
+                    )}
+                  </section>
+                )}
+
+                {/* Subscription override */}
+                {!editing && (
+                  <section>
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400 mb-2">
+                      Subscription
+                    </h3>
+                    <p className="text-sm text-gray-700 mb-2">
+                      {detail.subscriptionExpiresAt
+                        ? <>Expires: <strong>{fmt(detail.subscriptionExpiresAt)}</strong></>
+                        : <span className="text-gray-500">No expiry set (grandfathered).</span>}
+                    </p>
+                    {subOverrideMsg && (
+                      <p className="text-sm mb-2">{subOverrideMsg}</p>
+                    )}
+                    {subOverrideOpen ? (
+                      <div className="rounded border border-gray-200 p-3 space-y-3">
+                        <div>
+                          <label className="block text-xs font-medium mb-1">
+                            New expiry date (leave blank to remove expiry / grandfather)
+                          </label>
+                          <input
+                            type="date"
+                            className="rounded border px-2 py-1 text-sm w-full"
+                            value={subOverrideDate}
+                            onChange={(e) => setSubOverrideDate(e.target.value)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium mb-1">Reason (optional)</label>
+                          <input
+                            type="text"
+                            className="rounded border px-2 py-1 text-sm w-full"
+                            placeholder="e.g. manual extension"
+                            value={subOverrideReason}
+                            onChange={(e) => setSubOverrideReason(e.target.value)}
+                          />
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            className="rounded bg-black px-3 py-1.5 text-sm text-white disabled:opacity-50"
+                            onClick={handleSubscriptionOverride}
+                            disabled={subOverrideLoading}
+                          >
+                            {subOverrideLoading ? "Saving…" : "Save"}
+                          </button>
+                          <button
+                            className="rounded border px-3 py-1.5 text-sm"
+                            onClick={() => { setSubOverrideOpen(false); setSubOverrideMsg(null); }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <button
+                        className="rounded border px-3 py-1.5 text-sm"
+                        onClick={() => {
+                          setSubOverrideDate(
+                            detail.subscriptionExpiresAt
+                              ? new Date(detail.subscriptionExpiresAt).toISOString().slice(0, 10)
+                              : ""
+                          );
+                          setSubOverrideOpen(true);
+                          setSubOverrideMsg(null);
+                        }}
+                      >
+                        Override Expiry
                       </button>
                     )}
                   </section>

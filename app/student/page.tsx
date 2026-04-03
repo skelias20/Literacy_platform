@@ -44,11 +44,35 @@ export default async function StudentHomePage() {
   let totalRp = 0;
   let unknownWordCount = 0;
 
+  // Subscription banner state (computed once, used at render time)
+  let subscriptionBanner: "renewal_window" | "grace" | "locked" | null = null;
+  let subscriptionExpiresAt: Date | null = child.subscriptionExpiresAt ?? null;
+
   // ── Assessment banner states (active students only) ───────────────────
   let hasPendingInitial       = false; // session created but not yet submitted
   let hasPendingPeriodic      = false; // periodic triggered, not yet submitted
   let hasSubmittedPeriodic    = false; // periodic submitted, awaiting admin review
   let shouldRecommendTomorrow = false; // previous session was submitted today
+
+  // Compute subscription banner for any non-rejected, non-pending student
+  if (
+    subscriptionExpiresAt !== null &&
+    child.status !== "pending_payment" &&
+    child.status !== "rejected"
+  ) {
+    const billingConfig = await prisma.billingConfig.findFirst();
+    const gracePeriodDays   = billingConfig?.gracePeriodDays   ?? 7;
+    const renewalWindowDays = billingConfig?.renewalWindowDays ?? 7;
+    const now = new Date();
+    if (now > subscriptionExpiresAt) {
+      const hardLockAt = new Date(subscriptionExpiresAt.getTime() + gracePeriodDays * 86_400_000);
+      subscriptionBanner = now > hardLockAt ? "locked" : "grace";
+    } else {
+      const msUntil = subscriptionExpiresAt.getTime() - now.getTime();
+      const daysUntil = Math.ceil(msUntil / 86_400_000);
+      if (daysUntil <= renewalWindowDays) subscriptionBanner = "renewal_window";
+    }
+  }
 
   if (child.status === "active") {
     const [rpAgg, wordCount] = await prisma.$transaction([
@@ -177,6 +201,57 @@ export default async function StudentHomePage() {
         )}
       </div>
 
+      {/* Subscription banners */}
+      {subscriptionBanner === "locked" && (
+        <div className="mt-6 rounded border border-red-300 bg-red-50 p-4">
+          <p className="font-medium text-red-900">Subscription Expired</p>
+          <p className="mt-1 text-sm text-red-800">
+            Your subscription has expired and the grace period has ended.
+            Submitting work is paused until you renew.
+          </p>
+          <Link
+            className="mt-3 inline-block rounded bg-red-700 px-4 py-2 text-sm text-white"
+            href="/student/subscription"
+          >
+            Renew Now
+          </Link>
+        </div>
+      )}
+
+      {subscriptionBanner === "grace" && (
+        <div className="mt-6 rounded border border-amber-300 bg-amber-50 p-4">
+          <p className="font-medium text-amber-900">Subscription Expired</p>
+          <p className="mt-1 text-sm text-amber-800">
+            Your subscription expired on{" "}
+            {subscriptionExpiresAt!.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}.
+            Please renew to avoid losing access.
+          </p>
+          <Link
+            className="mt-3 inline-block rounded bg-amber-600 px-4 py-2 text-sm text-white"
+            href="/student/subscription"
+          >
+            Renew Subscription
+          </Link>
+        </div>
+      )}
+
+      {subscriptionBanner === "renewal_window" && (
+        <div className="mt-6 rounded border border-amber-200 bg-amber-50 p-4">
+          <p className="font-medium text-amber-900">Subscription Renewal Available</p>
+          <p className="mt-1 text-sm text-amber-800">
+            Your subscription expires on{" "}
+            {subscriptionExpiresAt!.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}.
+            You can submit your renewal payment now.
+          </p>
+          <Link
+            className="mt-3 inline-block rounded bg-amber-600 px-4 py-2 text-sm text-white"
+            href="/student/subscription"
+          >
+            View Subscription
+          </Link>
+        </div>
+      )}
+
       {/* Initial assessment required */}
       {child.status === "assessment_required" && (
         <div className="mt-6 rounded border p-4">
@@ -259,6 +334,24 @@ export default async function StudentHomePage() {
           <p className="mt-1 text-sm text-blue-800">
             Your re-evaluation has been submitted. Your teacher will review it shortly.
           </p>
+        </div>
+      )}
+
+      {/* Subscription */}
+      {child.status !== "pending_payment" && child.status !== "rejected" && (
+        <div className="mt-6 rounded border p-4">
+          <p className="font-medium">My Subscription</p>
+          <p className="mt-1 text-sm text-gray-700">
+            {subscriptionExpiresAt
+              ? `Active until ${subscriptionExpiresAt.toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })}.`
+              : "Subscription details are managed by your admin."}
+          </p>
+          <Link
+            className="mt-3 inline-block rounded bg-black px-4 py-2 text-sm text-white"
+            href="/student/subscription"
+          >
+            View Subscription
+          </Link>
         </div>
       )}
 

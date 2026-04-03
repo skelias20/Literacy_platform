@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import { verifyStudentJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { countWords, normaliseText } from "@/lib/wordCount";
+import { checkSubscriptionAccess } from "@/lib/subscription";
 import type { SkillType, TaskFormat } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -109,10 +110,14 @@ export async function POST(
     // ── Load child + task ─────────────────────────────────────────────────
     const child = await prisma.child.findUnique({
       where: { id: childId },
-      select: { id: true, level: true, status: true },
+      select: { id: true, level: true, status: true, subscriptionExpiresAt: true },
     });
     if (!child) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     if (child.status !== "active") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+
+    // Subscription gate — only blocks active students past the hard lock date.
+    const subCheck = await checkSubscriptionAccess(child);
+    if (!subCheck.ok) return subCheck.response;
 
     const task = await prisma.dailyTask.findUnique({
       where: { id: taskId },

@@ -58,7 +58,7 @@ export async function POST(req: Request) {
     const adminToken = cookieStore.get("admin_token")?.value;
     const studentToken = cookieStore.get("student_token")?.value;
 
-    const wantsStudent = context === "assessment_audio" || context === "daily_audio";
+    const wantsStudent = context === "assessment_audio" || context === "daily_audio" || context === "renewal_receipt";
     const wantsAdmin = context === "admin_content";
 
     let uploaderId: string | null = null;
@@ -101,7 +101,8 @@ export async function POST(req: Request) {
       if (!uploaderId) await tryAdmin();
     }
 
-    // Receipt confirmation comes from unauthenticated registration
+    // Registration receipt confirmation is unauthenticated.
+    // renewal_receipt and all other contexts require auth.
     if (context !== "receipt" && !uploaderId) {
       return deny(401, "Unauthorized");
     }
@@ -273,6 +274,12 @@ async function linkArtifact(params: {
     case "admin_content": {
       // Admin content items are created by the admin content route,
       // which calls confirm after the upload. Nothing to auto-link here.
+      break;
+    }
+
+    case "renewal_receipt": {
+      // The renew route links the fileId to RenewalPayment after the student submits.
+      // Nothing to auto-link here.
       break;
     }
   }

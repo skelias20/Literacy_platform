@@ -120,9 +120,64 @@
 
 * ~~**ISSUE-25:**~~ Admin student status clarity — action hints per status, periodic pending badge (list + detail), `lastDailySubmissionAt` staleness indicator. ✔
 
-
 * Refresh-token flow — deferred
 * Redis-backed rate limiter — deferred
+
+---
+
+### PENDING — PRE-LAUNCH (billing)
+
+#### ISSUE-18: Payment event table ✔ (implemented)
+* `PaymentEventType` enum + `PaymentEvent` model — migration applied
+* `PAYMENT_SUBMITTED` written at registration; `PAYMENT_APPROVED` / `PAYMENT_REJECTED` at admin review
+* Approve route auth wired (was missing — fixed in same pass)
+* `GET /api/admin/payments/[id]/events` route added
+* Event history toggle on `/admin/payments` page
+
+#### ISSUE-19: Monthly subscription renewal ✔ (implemented Session XI)
+> Full spec: `.claude/billing-subscription.md`
+
+**Schema (new migration: `add_billing_subscription`):**
+* `BillingConfig` — single-row config table (cycleDays, gracePeriodDays, renewalWindowDays, monthlyFee, currency)
+* `Subscription` — append-only history table (periodStart, periodEnd, renewalPaymentId?)
+* `RenewalPayment` — separate from registration Payment; has its own approve/reject flow
+* `RenewalPaymentStatus` enum (pending, approved, rejected)
+* `Child.subscriptionExpiresAt DateTime?` — denormalized cache of latest Subscription.periodEnd
+* Add `AuditAction` values: `RENEWAL_APPROVED`, `RENEWAL_REJECTED`, `SUBSCRIPTION_OVERRIDDEN`
+
+**Routes (new):**
+* `GET/POST /api/student/subscription` — current subscription state + renew submission
+* `POST /api/student/subscription/renew` — creates RenewalPayment + PaymentEvent
+* `GET /api/admin/subscriptions` — list RenewalPayments by status
+* `POST /api/admin/subscriptions/[id]/approve` — creates Subscription row, updates Child.subscriptionExpiresAt, writes PaymentEvent; new periodStart = prev.periodEnd
+* `POST /api/admin/subscriptions/[id]/reject` — writes PaymentEvent
+* `GET/PUT /api/admin/billing-config` — read/upsert BillingConfig
+* `PATCH /api/admin/students/[childId]/subscription` — admin manual override of subscriptionExpiresAt
+
+**Routes (modified):**
+* `POST /api/admin/payments/[id]/approve` — add: create first Subscription row + update Child.subscriptionExpiresAt at registration approval
+
+**Access control (student submission routes):**
+* Check `subscriptionExpiresAt` before allowing task/assessment submission
+* null = allow (grandfathered); within grace = allow + banner; past grace + active = 402 block
+* Pre-active students: never blocked by billing, flagged to admin only
+
+**UI (new pages):**
+* `/student/subscription` — days remaining, fee, renew button (enabled ≤ renewalWindowDays before expiry)
+* `/student/subscription/renew` — amount display, receipt upload or transaction ID, submit
+* `/admin/subscriptions` — pending/approved/rejected renewal list; same pattern as /admin/payments
+* Admin config panel — billing config section (cycleDays, gracePeriodDays, renewalWindowDays, monthlyFee)
+* Student detail panel — subscription status, expiry date, override button
+
+**Migration data step:**
+* For all non-rejected, non-pending_payment children: create Subscription row (periodStart = Payment.reviewedAt ?? Payment.createdAt, periodEnd = periodStart + 30 days), set Child.subscriptionExpiresAt = periodEnd
+
+**Future premium tier (designed, not implemented):**
+* `SubscriptionTier` enum (standard, premium) on `Subscription` row
+* `ContentItem.tier` field for content gating
+* Subject-specific premium libraries: GIS, Aviation English, Academic prep, subject-specific literacy
+* Payment gateway integration: webhook creates Subscription row, updates cache atomically
+* See `.claude/billing-subscription.md` § 9 for full premium architecture notes
 
 ---
 
@@ -135,7 +190,9 @@
 * AI writing evaluation rubric 
 * Behavioral engagement analytics 
 * Teacher intervention tools 
-* Multi-tenant / cohort architecture 
+* Multi-tenant / cohort architecture
+* Premium subscription tier (GIS, Aviation English, subject-specific content) — architecture designed in `.claude/billing-subscription.md` § 9
+* Third-party payment gateway integration (Stripe / PayMongo) — deferred until user volume justifies per-transaction fees 
 
 ---
 

@@ -11,6 +11,7 @@ import { verifyStudentJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { IdSchema } from "@/lib/schemas";
 import { countWords, normaliseText } from "@/lib/wordCount";
+import { checkSubscriptionAccess } from "@/lib/subscription";
 import type { TaskFormat } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -105,7 +106,7 @@ export async function POST(req: Request) {
         submittedAt: true, taskFormat: true, sessionNumber: true,
         periodicCycleNumber: true,
         lookupLevel: true,
-        child: { select: { status: true, level: true } },
+        child: { select: { status: true, level: true, subscriptionExpiresAt: true } },
       },
     });
 
@@ -115,6 +116,11 @@ export async function POST(req: Request) {
     if (assessment.submittedAt) {
       return NextResponse.json({ error: "Assessment already submitted" }, { status: 409 });
     }
+
+    // Subscription gate — only blocks active students past the hard lock date.
+    // Pre-active students submitting initial assessments are never blocked.
+    const subCheck = await checkSubscriptionAccess(assessment.child);
+    if (!subCheck.ok) return subCheck.response;
 
     // Use the level stored at assessment creation time — matches what the GET route showed the student.
     // Old rows (pre-migration) fall back to "foundational" for initial, assigned level for periodic.
