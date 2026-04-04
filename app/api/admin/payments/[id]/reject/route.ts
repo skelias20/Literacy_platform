@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { z } from "zod";
+import { requireAdminAuth } from "@/lib/serverAuth";
+import { sendPaymentRejectedEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
@@ -11,20 +11,12 @@ const RejectSchema = z.object({
   reason: z.string().max(500).optional().default(""),
 });
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await ctx.params;
@@ -35,7 +27,15 @@ export async function POST(
 
     const payment = await prisma.payment.findUnique({
       where: { id },
-      select: { id: true, status: true, childId: true, method: true, transactionId: true },
+      select: {
+        id: true, status: true, childId: true, method: true, transactionId: true,
+        child: {
+          select: {
+            childFirstName: true, childLastName: true, archivedAt: true,
+            parent: { select: { email: true } },
+          },
+        },
+      },
     });
 
     if (!payment) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -83,6 +83,12 @@ export async function POST(
         },
       });
     });
+
+    void sendPaymentRejectedEmail(
+      payment.child.parent?.email,
+      `${payment.child.childFirstName} ${payment.child.childLastName}`,
+      reason || null
+    ).catch(console.error);
 
     return NextResponse.json({ ok: true });
   } catch (e: unknown) {

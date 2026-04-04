@@ -16,7 +16,8 @@ function requireEnv(name: string): string {
   return v;
 }
 
-const JWT_SECRET = requireEnv("JWT_SECRET");
+const JWT_ADMIN_SECRET = requireEnv("JWT_ADMIN_SECRET");
+const JWT_STUDENT_SECRET = requireEnv("JWT_STUDENT_SECRET");
 const JWT_ALGORITHM = "HS256" as const;
 
 // ── Token payload types ───────────────────────────────────────────────────
@@ -28,12 +29,14 @@ export type AdminJwtPayload = {
   adminId: string;
   email: string;
   role: "admin";
+  tokenVersion: number;
 };
 
 export type StudentJwtPayload = {
   childId: string;
   username: string;
   role: "student";
+  tokenVersion: number;
 };
 
 // ── Signing ───────────────────────────────────────────────────────────────
@@ -41,7 +44,7 @@ export type StudentJwtPayload = {
 export function signAdminJwt(payload: Omit<AdminJwtPayload, "role">): string {
   return jwt.sign(
     { ...payload, role: "admin" },
-    JWT_SECRET,
+    JWT_ADMIN_SECRET,
     { algorithm: JWT_ALGORITHM, expiresIn: "1d" }
   );
 }
@@ -49,7 +52,7 @@ export function signAdminJwt(payload: Omit<AdminJwtPayload, "role">): string {
 export function signStudentJwt(payload: Omit<StudentJwtPayload, "role">): string {
   return jwt.sign(
     { ...payload, role: "student" },
-    JWT_SECRET,
+    JWT_STUDENT_SECRET,
     { algorithm: JWT_ALGORITHM, expiresIn: "1d" }
   );
 }
@@ -59,7 +62,7 @@ export function signStudentJwt(payload: Omit<StudentJwtPayload, "role">): string
 // Callers catch and return 401.
 
 export function verifyAdminJwt(token: string): AdminJwtPayload {
-  const decoded = jwt.verify(token, JWT_SECRET, { algorithms: [JWT_ALGORITHM] });
+  const decoded = jwt.verify(token, JWT_ADMIN_SECRET, { algorithms: [JWT_ALGORITHM] });
 
   if (typeof decoded !== "object" || decoded === null) {
     throw new Error("Invalid token payload");
@@ -70,16 +73,17 @@ export function verifyAdminJwt(token: string): AdminJwtPayload {
   if (
     typeof obj.adminId !== "string" ||
     typeof obj.email !== "string" ||
-    obj.role !== "admin"
+    obj.role !== "admin" ||
+    typeof obj.tokenVersion !== "number"
   ) {
     throw new Error("Invalid token payload shape");
   }
 
-  return { adminId: obj.adminId, email: obj.email, role: "admin" };
+  return { adminId: obj.adminId, email: obj.email, role: "admin", tokenVersion: obj.tokenVersion };
 }
 
 export function verifyStudentJwt(token: string): StudentJwtPayload {
-  const decoded = jwt.verify(token, JWT_SECRET, { algorithms: [JWT_ALGORITHM] });
+  const decoded = jwt.verify(token, JWT_STUDENT_SECRET, { algorithms: [JWT_ALGORITHM] });
 
   if (typeof decoded !== "object" || decoded === null) {
     throw new Error("Invalid token payload");
@@ -90,12 +94,13 @@ export function verifyStudentJwt(token: string): StudentJwtPayload {
   if (
     typeof obj.childId !== "string" ||
     typeof obj.username !== "string" ||
-    obj.role !== "student"
+    obj.role !== "student" ||
+    typeof obj.tokenVersion !== "number"
   ) {
     throw new Error("Invalid token payload shape");
   }
 
-  return { childId: obj.childId, username: obj.username, role: "student" };
+  return { childId: obj.childId, username: obj.username, role: "student", tokenVersion: obj.tokenVersion };
 }
 
 // ── Safe verifiers (non-throwing, for future API route use) ───────────────
@@ -110,7 +115,7 @@ export type VerifyResult =
 export function verifyAdminTokenSafe(token: string | undefined): VerifyResult {
   if (!token) return { ok: false, reason: "missing" };
   try {
-    const decoded = jwt.verify(token, JWT_SECRET, {
+    const decoded = jwt.verify(token, JWT_ADMIN_SECRET, {
       algorithms: [JWT_ALGORITHM],
     }) as JwtPayload;
     if (
@@ -130,7 +135,7 @@ export function verifyAdminTokenSafe(token: string | undefined): VerifyResult {
 export function verifyStudentTokenSafe(token: string | undefined): VerifyResult {
   if (!token) return { ok: false, reason: "missing" };
   try {
-    const decoded = jwt.verify(token, JWT_SECRET, {
+    const decoded = jwt.verify(token, JWT_STUDENT_SECRET, {
       algorithms: [JWT_ALGORITHM],
     }) as JwtPayload;
     if (

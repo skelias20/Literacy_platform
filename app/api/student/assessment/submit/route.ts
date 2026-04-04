@@ -4,14 +4,13 @@
 // not from AssessmentConfig.taskFormat (which no longer exists).
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { verifyStudentJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { IdSchema } from "@/lib/schemas";
 import { countWords, normaliseText } from "@/lib/wordCount";
 import { checkSubscriptionAccess } from "@/lib/subscription";
+import { requireStudentAuth } from "@/lib/serverAuth";
 import type { TaskFormat } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -79,17 +78,9 @@ function deriveFormatFromBank(textBody: string | null): TaskFormat {
 
 export async function POST(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("student_token")?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    let childId: string;
-    try {
-      const payload = verifyStudentJwt(token);
-      childId = payload.childId;
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const student = await requireStudentAuth(req);
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const childId = student.childId;
 
     const parsed = parseBody(
       AssessmentSubmitSchema,

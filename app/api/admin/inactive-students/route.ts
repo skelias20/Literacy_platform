@@ -1,18 +1,9 @@
 // app/api/admin/inactive-students/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
-
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`${name} is not set`);
-  return v;
-}
-
-const SECRET = mustGetEnv("JWT_SECRET");
 
 function startOfDayUtc(date: Date): Date {
   return new Date(
@@ -22,19 +13,8 @@ function startOfDayUtc(date: Date): Date {
 
 export async function GET(req: Request) {
   try {
-    // --- admin auth ---
-    const cookieStore = await cookies();
-    const token = cookieStore.get("admin_token")?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    const decoded = jwt.verify(token, SECRET);
-    if (typeof decoded !== "object" || decoded === null) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-    const payload = decoded as jwt.JwtPayload;
-    if (typeof payload.adminId !== "string") {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const adminId = await requireAdminAuth();
+    if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Parse ?date= param (defaults to today)
     const { searchParams } = new URL(req.url);

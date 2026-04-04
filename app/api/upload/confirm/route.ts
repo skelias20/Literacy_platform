@@ -5,42 +5,45 @@
 
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-import jwt from "jsonwebtoken";
+import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { getPublicUrl, r2ObjectExists, type UploadContext } from "@/lib/r2";
+import { getPublicUrl, r2ObjectExists } from "@/lib/r2";
+import { verifyStudentToken, verifyAdminToken } from "@/lib/serverAuth";
+import { validateOrigin } from "@/lib/csrf";
+import { parseBody } from "@/lib/parseBody";
 import { SkillType } from "@prisma/client";
 
 export const runtime = "nodejs";
 
-function mustGetEnv(name: string): string {
-  const v = process.env[name];
-  if (!v) throw new Error(`Missing env: ${name}`);
-  return v;
-}
-const SECRET = mustGetEnv("JWT_SECRET");
+const VALID_CONTEXTS = [
+  "receipt",
+  "renewal_receipt",
+  "assessment_audio",
+  "daily_audio",
+  "admin_content",
+] as const;
 
-type ConfirmBody = {
-  fileId: string;
-  context: UploadContext;
-  // Linking fields (same as presign body)
-  assessmentId?: string;
-  skill?: string;
-  taskId?: string;
-  // For receipt: childId is derived from auth
-};
+const ConfirmSchema = z.object({
+  fileId:       z.string().min(1).max(128).trim(),
+  context:      z.enum(VALID_CONTEXTS),
+  assessmentId: z.string().max(128).trim().optional(),
+  skill:        z.string().max(32).trim().optional(),
+  taskId:       z.string().max(128).trim().optional(),
+});
+
+type ConfirmBody = z.infer<typeof ConfirmSchema>;
 
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as Partial<ConfirmBody>;
-    const fileId = (body.fileId ?? "").trim();
-    const context = body.context;
-
-    if (!fileId || !context) {
-      return NextResponse.json(
-        { error: "fileId and context required" },
-        { status: 400 }
-      );
+    // CSRF guard — all confirm calls come from the same-origin browser
+    if (!validateOrigin(req)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
+
+    const parsed = parseBody(ConfirmSchema, await req.json().catch(() => null), "upload/confirm");
+    if (!parsed.ok) return parsed.response;
+    const body = parsed.data;
+    const { fileId, context } = body;
 
     const deny = (status: number, error: string, extra?: Record<string, unknown>) => {
       const payload = { error, ...(extra ?? {}) };
@@ -66,27 +69,19 @@ export async function POST(req: Request) {
 
     const tryStudent = async () => {
       if (!studentToken) return;
-      try {
-        const p = jwt.verify(studentToken, SECRET) as jwt.JwtPayload;
-        if (typeof p.childId === "string") {
-          uploaderId = p.childId;
-          uploaderType = "student";
-        }
-      } catch {
-        /* fall through */
+      const p = await verifyStudentToken(studentToken);
+      if (p) {
+        uploaderId = p.childId;
+        uploaderType = "student";
       }
     };
 
     const tryAdmin = async () => {
       if (!adminToken) return;
-      try {
-        const p = jwt.verify(adminToken, SECRET) as jwt.JwtPayload;
-        if (typeof p.adminId === "string") {
-          uploaderId = p.adminId;
-          uploaderType = "admin";
-        }
-      } catch {
-        /* fall through */
+      const p = await verifyAdminToken(adminToken);
+      if (p) {
+        uploaderId = p.adminId;
+        uploaderType = "admin";
       }
     };
 
@@ -180,12 +175,12 @@ async function linkArtifact(params: {
     uploadedByChildId: string | null;
     mimeType: string;
   };
-  body: Partial<ConfirmBody>;
+  body: ConfirmBody;
   uploaderId: string | null;
   uploaderType: "admin" | "student" | null;
 }) {
   const { file, body, uploaderId } = params;
-  const context = body.context!;
+  const context = body.context;
 
   switch (context) {
     case "receipt": {

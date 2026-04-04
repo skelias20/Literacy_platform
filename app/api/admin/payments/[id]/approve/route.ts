@@ -1,30 +1,31 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/serverAuth";
+import { sendPaymentApprovedEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 export async function POST(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const adminId = await requireAdmin();
+  const adminId = await requireAdminAuth(req);
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await ctx.params;
 
   const payment = await prisma.payment.findUnique({
     where: { id },
-    include: { child: true },
+    include: {
+      child: {
+        select: {
+          status: true,
+          childFirstName: true,
+          archivedAt: true,
+          parent: { select: { email: true } },
+        },
+      },
+    },
   });
 
   if (!payment) return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -93,6 +94,13 @@ export async function POST(
       },
     });
   });
+
+  // Fire notification — fire-and-forget, never blocks the route response.
+  void sendPaymentApprovedEmail(
+    payment.child.parent.email,
+    payment.child.childFirstName,
+    payment.child.archivedAt
+  ).catch(console.error);
 
   return NextResponse.json({ ok: true });
 }

@@ -13,9 +13,8 @@
 // to configure a question bank after a student's assessment row was already created.
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { verifyStudentJwt } from "@/lib/auth";
+import { requireStudentAuth } from "@/lib/serverAuth";
 import type { LiteracyLevel } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -42,17 +41,9 @@ function gradeToLevel(grade: number): LiteracyLevel {
 }
 
 export async function GET() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  let childId: string;
-  try {
-    const payload = verifyStudentJwt(token);
-    childId = payload.childId;
-  } catch {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+  const student = await requireStudentAuth();
+  if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const childId = student.childId;
 
   const child = await prisma.child.findUnique({ where: { id: childId } });
   if (!child) return NextResponse.json({ error: "Not found" }, { status: 404 });

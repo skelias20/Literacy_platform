@@ -2,11 +2,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { countWords, normaliseText } from "@/lib/wordCount";
 import { checkSubscriptionAccess } from "@/lib/subscription";
+import { requireStudentAuth } from "@/lib/serverAuth";
 import type { SkillType, TaskFormat } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -45,19 +44,6 @@ const DailySubmitSchema = z.object({
   attemptNumber: z.number().int().min(1).max(3).optional().default(1),
 });
 
-// ── Auth ──────────────────────────────────────────────────────────────────
-
-async function requireStudent(): Promise<{ childId: string } | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyStudentJwt(token);
-  } catch {
-    return null;
-  }
-}
-
 // ── Scoring helpers ───────────────────────────────────────────────────────
 
 function normaliseAnswer(s: string): string {
@@ -95,7 +81,7 @@ export async function POST(
   try {
     const { taskId } = await ctx.params;
 
-    const student = await requireStudent();
+    const student = await requireStudentAuth(req);
     if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const childId = student.childId;
 

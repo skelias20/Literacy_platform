@@ -4,25 +4,16 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 export async function DELETE(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ taskId: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { taskId } = await ctx.params;

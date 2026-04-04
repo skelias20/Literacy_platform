@@ -124,6 +124,7 @@ model Admin {
   passwordHash String
   firstName    String?
   lastName     String?
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
@@ -188,10 +189,15 @@ model Child {
 
   lastDailySubmissionAt DateTime?
   archivedAt            DateTime?
+  tokenVersion          Int       @default(0)
 
   // Billing — denormalized cache of the latest Subscription.periodEnd for fast access checks.
   // null = grandfathered / pre-billing / admin override → treat as valid indefinitely.
   subscriptionExpiresAt DateTime?
+
+  // Tracks when the last subscription expiry reminder email was sent to prevent spam.
+  // null = never sent. Updated in background on each send; checked before firing again.
+  lastRenewalReminderAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -661,4 +667,20 @@ model RenewalPayment {
   @@index([childId])
   @@index([status])
   @@index([createdAt])
+}
+
+// ─── Dictionary ───────────────────────────────────────────────────────────────
+
+// WordNet + CMUdict sourced entries. Imported once via scripts/import-dictionary.ts.
+// word is the PK (lowercase, trimmed) — btree index on PK gives O(log n) exact-match lookup.
+// pronunciation is ARPAbet from CMUdict (comma-separated if multiple alternates).
+// extraDefs holds additional {pos, definition} pairs when a word has multiple parts of speech.
+// Do NOT add secondary indexes until there is a concrete full-text search use case.
+model DictionaryEntry {
+  word         String   @id
+  pronunciation String?
+  partOfSpeech String?
+  definition   String
+  extraDefs    Json?
+  createdAt    DateTime @default(now())
 }

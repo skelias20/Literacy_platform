@@ -3,31 +3,19 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
+import { requireStudentAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
-async function requireStudent() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyStudentJwt(token);
-  } catch {
-    return null;
-  }
-}
-
 // DELETE /api/student/unknown-words/[id]
 export async function DELETE(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await ctx.params;
 
-    const student = await requireStudent();
+    const student = await requireStudentAuth(req);
     if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Verify ownership before deleting — a student must not delete another student's word.

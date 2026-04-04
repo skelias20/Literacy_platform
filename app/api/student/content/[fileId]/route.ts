@@ -3,9 +3,8 @@
 // Generates a short-lived presigned GET URL — bucket stays private.
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "@/lib/prisma";
-import { verifyStudentJwt } from "@/lib/auth";
+import { requireStudentAuth } from "@/lib/serverAuth";
 import { generatePresignedGetUrl } from "@/lib/r2";
 
 export const runtime = "nodejs";
@@ -15,18 +14,13 @@ export async function GET(
   ctx: { params: Promise<{ fileId: string }> }
 ) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("student_token")?.value;
-    if (!token) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const payload = verifyStudentJwt(token);
+    const student = await requireStudentAuth();
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     // Verify student is active or in the initial assessment phase.
     // assessment_required students need to access content during their initial assessment.
     const child = await prisma.child.findUnique({
-      where: { id: payload.childId },
+      where: { id: student.childId },
       select: { status: true },
     });
     if (!child || (child.status !== "active" && child.status !== "assessment_required")) {

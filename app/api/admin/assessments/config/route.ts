@@ -4,9 +4,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -18,14 +17,6 @@ const ConfigPutSchema = z.object({
   initialSessionCount:  z.number().int().min(1).max(MAX_SESSIONS),
   periodicSessionCount: z.number().int().min(1).max(MAX_SESSIONS),
 });
-
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
 
 async function buildCompletenessMap(
   initialSessionCount: number
@@ -69,7 +60,7 @@ async function buildCompletenessMap(
 // ── GET ───────────────────────────────────────────────────────────────────
 
 export async function GET() {
-  const adminId = await requireAdmin();
+  const adminId = await requireAdminAuth();
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
@@ -102,7 +93,7 @@ export async function GET() {
 // ── PUT ───────────────────────────────────────────────────────────────────
 
 export async function PUT(req: Request) {
-  const adminId = await requireAdmin();
+  const adminId = await requireAdminAuth(req);
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {

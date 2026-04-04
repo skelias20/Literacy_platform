@@ -1,21 +1,9 @@
 // app/api/admin/daily-reviews/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
-
-async function requireAdmin(): Promise<string | null> {
-  const store = await cookies();
-  const token = store.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
 
 function parseDateOnly(dateStr: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
@@ -24,7 +12,7 @@ function parseDateOnly(dateStr: string): Date | null {
 
 export async function GET(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth();
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { searchParams } = new URL(req.url);

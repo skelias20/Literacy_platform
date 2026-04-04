@@ -8,10 +8,9 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { z } from "zod";
+import { requireStudentAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -32,16 +31,9 @@ const RenewSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("student_token")?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    let childId: string;
-    try {
-      childId = verifyStudentJwt(token).childId;
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const student = await requireStudentAuth(req);
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const childId = student.childId;
 
     const parsed = parseBody(RenewSchema, await req.json().catch(() => null), "subscription/renew");
     if (!parsed.ok) return parsed.response;

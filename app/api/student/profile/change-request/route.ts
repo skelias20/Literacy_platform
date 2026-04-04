@@ -5,21 +5,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { Prisma } from "@prisma/client";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseBody } from "@/lib/parseBody";
-
-async function requireStudent(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyStudentJwt(token).childId;
-  } catch {
-    return null;
-  }
-}
+import { requireStudentAuth } from "@/lib/serverAuth";
 
 const ChangeRequestSchema = z.object({
   childFirstName:  z.string().min(1).max(64).trim().optional(),
@@ -38,8 +26,9 @@ const ChangeRequestSchema = z.object({
 // ── GET ───────────────────────────────────────────────────────────────────
 export async function GET() {
   try {
-    const childId = await requireStudent();
-    if (!childId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const student = await requireStudentAuth();
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const childId = student.childId;
 
     const request = await prisma.profileChangeRequest.findFirst({
       where: { childId },
@@ -65,8 +54,9 @@ export async function GET() {
 // ── POST ──────────────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
-    const childId = await requireStudent();
-    if (!childId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const student = await requireStudentAuth(req);
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const childId = student.childId;
 
     const parsed = parseBody(
       ChangeRequestSchema,

@@ -99,8 +99,9 @@ R2_SECRET_ACCESS_KEY=
 R2_BUCKET_NAME=
 R2_PUBLIC_URL=
 
-# JWT
-JWT_SECRET=
+# JWT — separate secrets per role (SEC-06)
+JWT_ADMIN_SECRET=
+JWT_STUDENT_SECRET=
 
 # Internal worker secret
 WORKER_SECRET=

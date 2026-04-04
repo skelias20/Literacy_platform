@@ -3,25 +3,16 @@
 // Used by the student profile page to pre-populate the change request form.
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { requireStudentAuth } from "@/lib/serverAuth";
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("student_token")?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    let childId: string;
-    try {
-      childId = verifyStudentJwt(token).childId;
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const student = await requireStudentAuth();
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const child = await prisma.child.findUnique({
-      where: { id: childId },
+      where: { id: student.childId },
       select: {
         childFirstName: true,
         childLastName:  true,

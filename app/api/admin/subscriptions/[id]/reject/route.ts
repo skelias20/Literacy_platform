@@ -5,10 +5,9 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { z } from "zod";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -16,20 +15,12 @@ const RejectSchema = z.object({
   reason: z.string().max(500).optional().default(""),
 });
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await ctx.params;

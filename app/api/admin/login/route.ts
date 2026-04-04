@@ -42,15 +42,24 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
     }
 
-    const token = signAdminJwt({ adminId: admin.id, email: admin.email });
+    const token = signAdminJwt({ adminId: admin.id, email: admin.email, tokenVersion: admin.tokenVersion });
 
     const res = NextResponse.json({ ok: true });
+    // SEC-03 (Option A): maxAge aligned to JWT expiresIn ("1d") so the cookie
+    // is never live after the token it carries has expired. This eliminates the
+    // 6-day stale-cookie window that was causing 401 redirect loops post-expiry.
+    //
+    // TODO SEC-03 (Option B — when Redis is available): replace with short-lived
+    // access tokens (15 min JWT) + a long-lived httpOnly refresh token stored in
+    // the DB/Redis with server-side revocation. This also unblocks SEC-04
+    // (session invalidation on archive/password-reset) and SEC-07 (Redis-backed
+    // rate limiter). Upstash Redis is the recommended provider for Vercel deploys.
     res.cookies.set("admin_token", token, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
       path: "/",
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: 60 * 60 * 24, // 1 day — matches JWT expiresIn: "1d"
     });
 
     return res;

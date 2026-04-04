@@ -9,28 +9,28 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
+import { requireStudentAuth } from "@/lib/serverAuth";
+import { sendRenewalReminderEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
-    const cookieStore = await cookies();
-    const token = cookieStore.get("student_token")?.value;
-    if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-    let childId: string;
-    try {
-      childId = verifyStudentJwt(token).childId;
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    const student = await requireStudentAuth();
+    if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const childId = student.childId;
 
     const [child, config, pendingRenewal] = await Promise.all([
       prisma.child.findUnique({
         where: { id: childId },
-        select: { subscriptionExpiresAt: true, status: true },
+        select: {
+          subscriptionExpiresAt: true,
+          status: true,
+          childFirstName: true,
+          archivedAt: true,
+          lastRenewalReminderAt: true,
+          parent: { select: { email: true } },
+        },
       }),
       prisma.billingConfig.findFirst(),
       prisma.renewalPayment.findFirst({
@@ -61,6 +61,28 @@ export async function GET() {
       } else {
         const hardLockAt = new Date(expiresAt.getTime() + gracePeriodDays * 86_400_000);
         accessState = now <= hardLockAt ? "grace" : "locked";
+      }
+    }
+
+    // Event 5 — Subscription expiry reminder (fire-and-forget, 3-day cooldown).
+    // Only fires when a real expiry date exists and is within the renewal window.
+    if (expiresAt !== null && daysRemaining !== null && daysRemaining <= renewalWindowDays) {
+      const reminderAgeMs = child.lastRenewalReminderAt
+        ? Date.now() - child.lastRenewalReminderAt.getTime()
+        : Infinity;
+      const reminderAgeDays = reminderAgeMs / 86_400_000;
+
+      if (reminderAgeDays > 3) {
+        void sendRenewalReminderEmail(
+          child.parent.email,
+          child.childFirstName,
+          expiresAt,
+          child.archivedAt
+        ).catch(console.error);
+        // Update timestamp in background — failure is non-critical.
+        void prisma.child
+          .update({ where: { id: childId }, data: { lastRenewalReminderAt: new Date() } })
+          .catch(console.error);
       }
     }
 

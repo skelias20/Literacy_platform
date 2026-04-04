@@ -5,9 +5,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -53,14 +52,6 @@ const QuestionBankPutSchema = z.object({
   { message: "MCQ correct answer must match one of the provided options." }
 );
 
-async function requireAdmin(): Promise<string | null> {
-  const store = await cookies();
-  const token = store.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 // ── GET ───────────────────────────────────────────────────────────────────
 
 export async function GET(
@@ -68,7 +59,7 @@ export async function GET(
   ctx: { params: Promise<{ contentItemId: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth();
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { contentItemId } = await ctx.params;
@@ -116,7 +107,7 @@ export async function PUT(
   ctx: { params: Promise<{ contentItemId: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { contentItemId } = await ctx.params;

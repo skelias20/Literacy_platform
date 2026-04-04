@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { verifyAdminJwt } from "@/lib/auth";
 import Link from "next/link";
+import LogoutButton from "./LogoutButton";
 
 export default async function AdminHomePage() {
   const cookieStore = await cookies();
@@ -18,7 +19,10 @@ export default async function AdminHomePage() {
 
   return (
     <main className="p-10">
-      <h1 className="text-3xl font-bold">Admin Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-3xl font-bold">Admin Dashboard</h1>
+        <LogoutButton />
+      </div>
       <p className="mt-2 text-gray-700">Logged in as: {payload.email}</p>
       <div className="mt-4 flex gap-3">
   <Link className="underline" href="/admin/payments">

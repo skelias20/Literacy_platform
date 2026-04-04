@@ -5,10 +5,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, SkillSchema, IdSchema } from "@/lib/schemas";
+import { requireAdminAuth } from "@/lib/serverAuth";
+import { sendTaskCreatedEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
@@ -93,14 +93,6 @@ const DailyTaskPostSchema = z.object({
   { message: "MCQ correct answer must match one of the provided options.", path: ["questionBank"] }
 );
 
-async function requireAdmin(): Promise<string | null> {
-  const store = await cookies();
-  const token = store.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 function parseDateOnly(dateStr: string): Date {
   return new Date(`${dateStr}T00:00:00.000Z`);
 }
@@ -109,7 +101,7 @@ function parseDateOnly(dateStr: string): Date {
 
 export async function GET(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth();
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { searchParams } = new URL(req.url);
@@ -185,7 +177,7 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const parsed = parseBody(
@@ -331,6 +323,43 @@ export async function POST(req: Request) {
 
       return results;
     });
+
+    // Event 3 — Notify parents of eligible students (fan-out, fire-and-forget).
+    // Runs OUTSIDE the transaction so we never hold a DB tx open during N HTTP calls.
+    // Only fires when skills were actually created and the date is today or future
+    // (past dates are already blocked above, so this guard is a safety net only).
+    if (created.length > 0) {
+      void (async () => {
+        try {
+          const eligibleWithParents = await prisma.child.findMany({
+            where: {
+              status: "active",
+              archivedAt: null,
+              ...(levelValue ? { level: levelValue } : {}),
+            },
+            select: {
+              childFirstName: true,
+              archivedAt: true,
+              parent: { select: { email: true } },
+            },
+          });
+
+          const skillNames = created.map((r) => r.skill);
+
+          for (const child of eligibleWithParents) {
+            void sendTaskCreatedEmail(
+              child.parent.email,
+              child.childFirstName,
+              skillNames,
+              body.date,
+              child.archivedAt
+            ).catch(console.error);
+          }
+        } catch (err) {
+          console.error("[email] Task created fan-out failed:", err);
+        }
+      })();
+    }
 
     return NextResponse.json({ ok: true, created });
   } catch (e: unknown) {

@@ -8,10 +8,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, IdSchema } from "@/lib/schemas";
+import { requireAdminAuth } from "@/lib/serverAuth";
 import type { LiteracyLevel } from "@prisma/client";
 
 export const runtime = "nodejs";
@@ -22,20 +21,9 @@ const TriggerPeriodicSchema = z.discriminatedUnion("scope", [
   z.object({ scope: z.literal("student"), childId: IdSchema }),
 ]);
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
-
 export async function POST(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const parsed = parseBody(

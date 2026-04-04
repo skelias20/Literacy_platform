@@ -4,6 +4,7 @@ import { z } from "zod";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, getClientIp, RATE_LIMITS } from "@/lib/rateLimit";
 import { parseBody } from "@/lib/parseBody";
+import { sendPaymentSubmittedEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
@@ -213,6 +214,11 @@ export async function POST(req: Request) {
 
       return { child, payment };
     });
+
+    void sendPaymentSubmittedEmail(
+      data.parentEmail,
+      `${data.childFirstName} ${data.childLastName}`
+    ).catch(console.error);
 
     return NextResponse.json({
       ok: true,

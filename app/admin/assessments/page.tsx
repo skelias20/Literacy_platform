@@ -238,6 +238,7 @@ export default function AdminAssessmentsPage() {
     if (!res.ok) { setAssignMsg(data.error ?? "Failed to load."); return; }
     const sessions: SessionDetail[] = data.allSessions ?? [];
     setAllSessions(sessions);
+    if (data.assessment) setSelectedRow(data.assessment as Row);
     const latest = sessions.filter((s) => s.submittedAt).at(-1);
     setActiveSession(latest?.sessionNumber ?? 1);
   }

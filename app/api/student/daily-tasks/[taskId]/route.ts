@@ -1,21 +1,9 @@
 // app/api/student/daily-tasks/[taskId]/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
+import { requireStudentAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
-
-async function requireStudent(): Promise<{ childId: string; username: string } | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyStudentJwt(token);
-  } catch {
-    return null;
-  }
-}
 
 export async function GET(
   _req: Request,
@@ -24,7 +12,7 @@ export async function GET(
   try {
     const { taskId } = await ctx.params;
 
-    const student = await requireStudent();
+    const student = await requireStudentAuth();
     if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const child = await prisma.child.findUnique({

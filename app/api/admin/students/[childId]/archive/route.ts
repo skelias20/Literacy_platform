@@ -2,29 +2,19 @@
 // POST — toggles archivedAt on a student record.
 // Archiving is a soft operation — no data is deleted.
 // An archived student cannot log in but all their data is preserved.
+// SEC-04: When archiving, the student's tokenVersion is incremented to
+// immediately invalidate any active sessions — no 24-hour grace window.
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
-
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
+import { requireAdminAuth, invalidateStudentSessions } from "@/lib/serverAuth";
 
 export async function POST(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ childId: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { childId } = await ctx.params;
@@ -45,6 +35,12 @@ export async function POST(
       where: { id: childId },
       data: { archivedAt: isCurrentlyArchived ? null : new Date() },
     });
+
+    // Invalidate any active student sessions when archiving.
+    // Unarchiving does NOT invalidate — the student must log in fresh anyway.
+    if (!isCurrentlyArchived) {
+      await invalidateStudentSessions(childId);
+    }
 
     return NextResponse.json({
       ok: true,

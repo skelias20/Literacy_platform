@@ -3,11 +3,12 @@
 // app/student/words/page.tsx
 // Full vocabulary list — paginated, sortable by date.
 // Students can add words manually and delete any saved word.
-// Future: definition lookup will be added per-word without layout changes.
+// "Look up" expands an inline definition panel per word; results are cached in state.
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { studentFetch } from "@/lib/fetchWithAuth";
+import { arpabetToIpa } from "@/lib/arpabetToIpa";
 
 type UnknownWordSource = "assessment" | "daily_task" | "manual";
 
@@ -18,6 +19,17 @@ type SavedWord = {
   note: string | null;
   createdAt: string;
 };
+
+type DictionaryResult = {
+  word:          string;
+  pronunciation: string | null;
+  partOfSpeech:  string | null;
+  definition:    string;
+  extraDefs:     Array<{ pos: string; definition: string }> | null;
+};
+
+// Sentinel value stored in lookupCache when a word is not in the dictionary.
+const NOT_FOUND = "not_found" as const;
 
 const SOURCE_LABELS: Record<UnknownWordSource, string> = {
   assessment: "Assessment",
@@ -38,6 +50,11 @@ export default function UnknownWordsPage() {
   const [inputWord, setInputWord] = useState("");
   const [saving,    setSaving]    = useState(false);
   const [saveErr,   setSaveErr]   = useState<string | null>(null);
+
+  // Dictionary lookup — keyed by word string; value is DictionaryResult or NOT_FOUND sentinel
+  const [lookupCache,   setLookupCache]   = useState<Record<string, DictionaryResult | typeof NOT_FOUND>>({});
+  const [lookingUp,     setLookingUp]     = useState<Record<string, boolean>>({});
+  const [expandedWords, setExpandedWords] = useState<Record<string, boolean>>({});
 
   // ── Initial load ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -131,6 +148,29 @@ export default function UnknownWordsPage() {
     if (e.key === "Enter") { e.preventDefault(); addWord(); }
   }
 
+  // ── Dictionary lookup ─────────────────────────────────────────────────────
+  async function lookupWord(word: string) {
+    // Toggle collapse if already fetched
+    if (lookupCache[word] !== undefined) {
+      setExpandedWords((prev) => ({ ...prev, [word]: !prev[word] }));
+      return;
+    }
+
+    setLookingUp((prev)     => ({ ...prev, [word]: true }));
+    setExpandedWords((prev) => ({ ...prev, [word]: true }));
+
+    const res  = await studentFetch(`/api/dictionary?word=${encodeURIComponent(word)}`);
+    const data = await res.json().catch(() => ({}));
+
+    setLookingUp((prev) => ({ ...prev, [word]: false }));
+
+    if (res.ok) {
+      setLookupCache((prev) => ({ ...prev, [word]: data as DictionaryResult }));
+    } else {
+      setLookupCache((prev) => ({ ...prev, [word]: NOT_FOUND }));
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────
   return (
     <main className="p-10 max-w-2xl">
@@ -201,37 +241,90 @@ export default function UnknownWordsPage() {
             </p>
 
             <div className="space-y-2">
-              {words.map((w) => (
-                <div
-                  key={w.id}
-                  className="flex items-center justify-between rounded border px-4 py-3"
-                >
-                  <div className="min-w-0">
-                    <span className="font-medium text-gray-900">{w.word}</span>
-                    <span className="ml-3 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
-                      {SOURCE_LABELS[w.source]}
-                    </span>
-                    <span className="ml-2 text-xs text-gray-400">
-                      {new Date(w.createdAt).toLocaleDateString("en-US", {
-                        month: "short",
-                        day:   "numeric",
-                        year:  "numeric",
-                      })}
-                    </span>
-                    {w.note && (
-                      <p className="mt-0.5 truncate text-xs italic text-gray-500">{w.note}</p>
+              {words.map((w) => {
+                const cached   = lookupCache[w.word];
+                const loading  = lookingUp[w.word] ?? false;
+                const expanded = expandedWords[w.word] ?? false;
+
+                return (
+                  <div
+                    key={w.id}
+                    className="rounded border"
+                  >
+                    {/* Word row */}
+                    <div className="flex items-center justify-between px-4 py-3">
+                      <div className="min-w-0">
+                        <span className="font-medium text-gray-900">{w.word}</span>
+                        <span className="ml-3 rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                          {SOURCE_LABELS[w.source]}
+                        </span>
+                        <span className="ml-2 text-xs text-gray-400">
+                          {new Date(w.createdAt).toLocaleDateString("en-US", {
+                            month: "short",
+                            day:   "numeric",
+                            year:  "numeric",
+                          })}
+                        </span>
+                        {w.note && (
+                          <p className="mt-0.5 truncate text-xs italic text-gray-500">{w.note}</p>
+                        )}
+                      </div>
+                      <div className="ml-4 flex shrink-0 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => lookupWord(w.word)}
+                          disabled={loading}
+                          className="rounded px-2 py-1 text-xs text-blue-600 hover:bg-blue-50 disabled:opacity-50"
+                          aria-label={`Look up "${w.word}"`}
+                        >
+                          {loading ? "…" : expanded ? "Hide" : "Look up"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => removeWord(w.id)}
+                          className="rounded px-2 py-1 text-xs text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          aria-label={`Remove "${w.word}"`}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Definition panel */}
+                    {expanded && cached !== undefined && (
+                      <div className="border-t bg-gray-50 px-4 py-3 text-sm">
+                        {cached === NOT_FOUND ? (
+                          <p className="text-gray-500 italic">Not found in dictionary.</p>
+                        ) : (
+                          <>
+                            {cached.partOfSpeech && (
+                              <span className="mr-2 rounded-full bg-white border px-2 py-0.5 text-xs font-medium text-gray-500">
+                                {cached.partOfSpeech}
+                              </span>
+                            )}
+                            {cached.pronunciation && (
+                              <span className="mr-2 font-mono text-xs text-gray-400">
+                                {arpabetToIpa(cached.pronunciation)}
+                              </span>
+                            )}
+                            <p className="mt-1 text-gray-800">{cached.definition}</p>
+                            {cached.extraDefs && cached.extraDefs.length > 0 && (
+                              <ul className="mt-2 space-y-1 border-t pt-2">
+                                {cached.extraDefs.map((d, i) => (
+                                  <li key={i} className="text-xs text-gray-600">
+                                    <span className="mr-1 font-medium">{d.pos}:</span>
+                                    {d.definition}
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          </>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => removeWord(w.id)}
-                    className="ml-4 shrink-0 rounded px-2 py-1 text-xs text-gray-400 hover:bg-red-50 hover:text-red-600"
-                    aria-label={`Remove "${w.word}"`}
-                  >
-                    Remove
-                  </button>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             {words.length < total && (

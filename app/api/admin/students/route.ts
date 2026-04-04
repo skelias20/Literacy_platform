@@ -2,9 +2,8 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 const VALID_SORT = ["name", "grade", "status", "level", "createdAt", "rp"] as const;
 
@@ -15,20 +14,9 @@ const ListQuerySchema = z.object({
   showArchived: z.enum(["true", "false"]).optional().default("false"),
 });
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
-
 export async function GET(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth();
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { searchParams } = new URL(req.url);

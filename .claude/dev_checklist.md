@@ -112,16 +112,168 @@
 ---
 
 
+### SPRINT PLAN — Approved Implementation Sequence
+
+> Items below are ordered. Each sprint is one implementation session. Do not skip ahead.
+> Full specs for each item are in the referenced `.claude/` files.
+
+---
+
+#### Sprint 1 — Mobile Responsiveness (ISSUE-24)
+
+**Scope:** Pure frontend. No schema changes. No new routes.
+
+Student pages (in order):
+1. `/student` (dashboard) — layout, subscription banners, nav at 375px
+2. `/student/assessment` — writing textarea (`dvh`), audio recorder touch targets, iOS Safari `MediaRecorder` format detection
+3. `/student/tasks/[taskId]` — listening player controls, writing constraints display, audio recorder
+4. `/student/subscription` + `/student/subscription/renew` — receipt upload, mobile form layout
+5. `/student/words` — word list, add-word input
+6. `/student/profile` — form layout
+
+Admin panel: no horizontal overflow at 768px (tablet) minimum — fix overflow only, full mobile not required.
+
+**Tailwind rules:**
+- Use `sm:` and `md:` breakpoints throughout
+- Minimum touch target: 44×44 px (`min-h-[44px] min-w-[44px]`)
+- Base font: `text-base` (16px) minimum on all student pages
+- Navigation: no horizontal scroll at 375px
+
+---
+
+#### Sprint 2 — In-Context Unknown Word Panel
+
+Completed / IMPLEMENTED ✔
+
+#### Sprint 3 — Word Definition Lookup  IMPLEMENTED ✔
+
+**Scope:** Schema migration + data import script + new API route + UI on words page.
+
+Full spec: `.claude/dictionary.md`
+
+Steps:
+1. Schema migration `add_dictionary_entries` — add `DictionaryEntry` model
+2. Optional: migration `add_unknown_word_definition_cache` — add `definition String?` to `UnknownWord`
+3. Download WordNet 3.1 + CMUdict data files (do not commit — add to `.gitignore`)
+4. Write `scripts/import-dictionary.ts` — parse + bulk insert via `createMany`
+5. Run import locally, verify counts, spot-check entries
+6. Add `GET /api/student/dictionary?word=X` route (student auth, exact-match PK lookup)
+7. Add "Look up" expand UI to each word row on `/student/words`
+8. Apply migration + run import on production (Supabase)
+
+---
+
+#### Sprint 4 — Admin Word Insights IMPLEMENTED ✔
+
+**Scope:** New admin route + small UI section in student detail panel.
+
+**No schema change.**
+
+Build:
+- `GET /api/admin/students/[childId]/unknown-words` — returns paginated word list for one student
+- Section in student detail panel (`app/admin/students/page.tsx`) showing student's saved words
+- Optional global aggregate: `GET /api/admin/analytics/words` — top 20 most saved words across all students (can be folded into Sprint 7 analytics instead)
+
+---
+
+#### Sprint 5 — Email Notifications ✔ (implemented)
+
+**Scope:** One schema migration + new lib file + wiring into existing routes.
+
+Full spec: `.claude/notifications.md`
+
+- `npm install resend` — resend@6.10.0
+- Migration `add_child_renewal_reminder_at` — `lastRenewalReminderAt DateTime?` added to `Child`
+- `lib/email.ts` — provider-agnostic: private `sendEmail()` is the only Resend-aware function; all 5 domain functions are provider-agnostic. To switch providers: replace `sendEmail()` only.
+- Event 1 (payment approved) wired in `POST /api/admin/payments/[id]/approve`
+- Event 2 (level assigned) wired in `POST /api/admin/assessments/assign-level` — fires for initial and periodic
+- Event 4 (renewal approved) wired in `POST /api/admin/subscriptions/[id]/approve`
+- Event 5 (expiry warning) wired in `GET /api/student/subscription` — 3-day cooldown via `lastRenewalReminderAt`
+- Event 3 (task created fan-out) wired in `POST /api/admin/daily-tasks` — query + send runs OUTSIDE transaction
+- ENV: `RESEND_API_KEY`, `EMAIL_FROM` (fallback hardcoded in `lib/email.ts`)
+
+---
+
+#### Sprint 6 — Security: Redis Rate Limiter (SEC-07)
+
+**Blocked on:** Upstash account (requires payment card).
+
+Full design: `.claude/dev_checklist.md` §SEC-07 section below.
+
+Steps (ready to execute once credentials available):
+1. `npm install @upstash/redis`
+2. Rewrite `lib/rateLimit.ts` to async Upstash sorted-set pipeline
+3. Add `await` to 5 call sites
+4. Add env vars to `.env` + `README.md`
+
+---
+
+#### Sprint 7 — Analytics Dashboard
+
+**Scope:** New API route + new admin page + recharts.
+
+Full spec: `.claude/analytics.md`
+
+Steps:
+1. `npm install recharts`
+2. `GET /api/admin/analytics` — all 6 panels, cached 15 min
+3. `app/admin/analytics/page.tsx` — 6-panel grid
+4. Add "Analytics" link to admin nav
+
+---
+
+#### Sprint 8 — Refresh Token Flow
+
+**Scope:** Schema migration + new route + client-side interceptor in `fetchWithAuth`.
+
+Steps:
+1. Schema migration: `RefreshToken` model (hashed token, childId/adminId, expiresAt, revokedAt, userAgent)
+2. `POST /api/student/refresh` + `POST /api/admin/refresh`
+3. Update `lib/fetchWithAuth.ts` to intercept 401, attempt silent refresh, retry once
+4. Update login routes to set both access token cookie and refresh token cookie
+
+---
+
+#### Sprint 9.5 — Daily Task Reminder (Scheduled Email)
+
+**Scope:** No schema change. New email function + new internal route + worker cron addition.
+
+Full spec: `.claude/notifications.md` § 9
+
+Steps:
+1. Add `sendDailyTaskReminderEmail` to `lib/email.ts`
+2. Create `app/api/internal/daily-reminder/route.ts` — POST, protected by `x-worker-secret`, same pattern as `/api/internal/orphan-sweep`
+3. Add `handleDailyReminders` to `worker/src/index.ts` (calls new route)
+4. Add second cron to `worker/wrangler.toml` (e.g. `"0 7 * * *"` = 8 AM WAT)
+5. Route `event.cron` in `scheduled` handler
+6. Redeploy worker: `cd worker && npx wrangler deploy`
+
+**Key constraint:** Resend free tier = 100 emails/day. Exceeding active student count of ~100 requires a paid plan.
+
+---
+
+#### Sprint 9 — Admin-Configurable Recording Duration
+
+**Scope:** One schema migration + one input in task creation + enforcement in audio recorder.
+
+Steps:
+1. Schema migration `add_task_recording_duration`: add `maxRecordingSeconds Int @default(120)` to `DailyTask`
+2. Add input to admin task creation form
+3. Return `maxRecordingSeconds` from `GET /api/student/daily-tasks/[taskId]`
+4. Enforce in audio recorder component
+
+---
+
 ### PENDING — NEAR TERM
 
 * ~~**ISSUE-17:**~~ Grade range enforcement — enforced 1–12; grades 7–12 map to `advanced` level. ✔
 
-* **ISSUE-24:** Mobile/PC responsiveness audit — student-facing pages first (dashboard, assessment, tasks, audio recorder). Admin panel: no horizontal overflow at tablet width minimum.
+* **ISSUE-24:** Mobile/PC responsiveness audit — **Sprint 1.** See sprint plan above.
 
 * ~~**ISSUE-25:**~~ Admin student status clarity — action hints per status, periodic pending badge (list + detail), `lastDailySubmissionAt` staleness indicator. ✔
 
-* Refresh-token flow — deferred
-* Redis-backed rate limiter — deferred
+* Refresh-token flow — **Sprint 8.** See sprint plan above.
+* Redis-backed rate limiter — **Sprint 6.** See sprint plan above (SEC-07 section unchanged below).
 
 ---
 
@@ -181,18 +333,48 @@
 
 ---
 
+### DEFERRED — Security (requires Upstash account / card)
+
+#### SEC-07: Redis-backed rate limiter
+
+**Blocked on:** Upstash account creation (requires payment card).
+
+**Why it matters:** `lib/rateLimit.ts` uses a process-local `Map`. On Vercel serverless, each cold-start instance has its own counter — an attacker rotating across instances effectively multiplies allowed attempts by the instance count. Login limits (`adminLogin: 5/15 min`, `studentLogin: 10/15 min`) are the most critical to enforce correctly.
+
+**Design decisions already agreed:**
+- **Provider:** Upstash Redis (HTTP-based, serverless-safe, no persistent connections). Two env vars to add: `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
+- **Algorithm:** Keep the existing sliding window log, backed by a Redis sorted-set pipeline (`ZREMRANGEBYSCORE` → `ZADD` → `ZCARD` → `EXPIRE`). One package: `@upstash/redis`. Do NOT use `@upstash/ratelimit` package — hand-rolled is transparent and sufficient.
+- **On Redis failure:** Fail-open (allow the request, `console.error`). Blocking all logins during a Redis outage is a worse outcome than a short unprotected window.
+- **Dev behaviour:** Unchanged — rate limiting stays disabled when `NODE_ENV === "development"` (all localhost requests share the same "unknown" IP which exhausts limits instantly).
+
+**Implementation steps (ready to execute once Upstash credentials are available):**
+1. `npm install @upstash/redis`
+2. Rewrite `rateLimit()` in `lib/rateLimit.ts` to be `async`, using a sorted-set pipeline against Upstash. Keep `RATE_LIMITS`, `getClientIp`, `formatRetryAfter` signatures unchanged.
+3. Add `await` to all 5 call sites:
+   - `app/api/admin/login/route.ts`
+   - `app/api/student/login/route.ts`
+   - `app/api/upload/presign/route.ts`
+   - `app/api/admin/content/route.ts`
+   - `app/api/register/route.ts`
+4. Add `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` to `.env` and `README.md`.
+5. Mark SEC-07 fixed in `.claude/security-audit.md`.
+
+**Test impact:** None — all tests mock `@/lib/rateLimit` at the module level (`jest.mock`). No test file changes needed.
+
+---
+
 ### DEFERRED — P3+
-* Admin-configurable recording duration per task 
-* Parent notification system (SMS/email) 
-* Analytics dashboard — requires event tracking architecture first 
-* AI evaluation layer: writing scoring, pronunciation, comprehension grading 
-* Adaptive difficulty / vocabulary progression model 
-* AI writing evaluation rubric 
-* Behavioral engagement analytics 
-* Teacher intervention tools 
+* ~~Admin-configurable recording duration per task~~ → **Sprint 9** (promoted, designed)
+* ~~Parent notification system (SMS/email)~~ → **Sprint 5** (promoted, designed in `.claude/notifications.md`)
+* ~~Analytics dashboard~~ → **Sprint 7** (promoted, designed in `.claude/analytics.md`)
+* AI evaluation layer: writing scoring, pronunciation, comprehension grading
+* Adaptive difficulty / vocabulary progression model
+* AI writing evaluation rubric
+* Behavioral engagement analytics (requires event tracking schema first)
+* Teacher intervention tools
 * Multi-tenant / cohort architecture
-* Premium subscription tier (GIS, Aviation English, subject-specific content) — architecture designed in `.claude/billing-subscription.md` § 9
-* Third-party payment gateway integration (Stripe / PayMongo) — deferred until user volume justifies per-transaction fees 
+* Premium subscription tier (GIS, Aviation English, subject-specific content) — architecture designed in `.claude/billing-subscription.md` § 9 + `.claude/payment-plans.md`
+* Third-party payment gateway integration (Stripe / PayMongo) — deferred until user volume justifies per-transaction fees
 
 ---
 

@@ -7,10 +7,9 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, SkillSchema, IdSchema } from "@/lib/schemas";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -27,18 +26,10 @@ const SlotDeleteSchema = z.object({
   sessionNumber: z.number().int().min(1).max(5),
 });
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try { return verifyAdminJwt(token).adminId; }
-  catch { return null; }
-}
-
 // ── GET ───────────────────────────────────────────────────────────────────
 
 export async function GET() {
-  const adminId = await requireAdmin();
+  const adminId = await requireAdminAuth();
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
@@ -96,7 +87,7 @@ export async function GET() {
 // ── POST ──────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
-  const adminId = await requireAdmin();
+  const adminId = await requireAdminAuth(req);
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {
@@ -159,7 +150,7 @@ export async function POST(req: Request) {
 // ── DELETE ────────────────────────────────────────────────────────────────
 
 export async function DELETE(req: Request) {
-  const adminId = await requireAdmin();
+  const adminId = await requireAdminAuth(req);
   if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   try {

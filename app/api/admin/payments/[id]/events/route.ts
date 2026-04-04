@@ -1,7 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
 
@@ -9,10 +8,8 @@ export async function GET(
   _req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  try { verifyAdminJwt(token); } catch { return NextResponse.json({ error: "Unauthorized" }, { status: 401 }); }
+  const adminId = await requireAdminAuth();
+  if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { id } = await ctx.params;
 

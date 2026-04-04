@@ -4,29 +4,17 @@
 
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyStudentJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { AddUnknownWordSchema } from "@/lib/schemas";
+import { requireStudentAuth } from "@/lib/serverAuth";
 
 export const runtime = "nodejs";
-
-async function requireStudent() {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("student_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyStudentJwt(token);
-  } catch {
-    return null;
-  }
-}
 
 // GET /api/student/unknown-words?limit=20&offset=0
 // Returns { words: [...], total: number }
 export async function GET(req: Request) {
   try {
-    const student = await requireStudent();
+    const student = await requireStudentAuth();
     if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const url    = new URL(req.url);
@@ -57,7 +45,7 @@ export async function GET(req: Request) {
 // Returns { word: {...}, created: boolean }
 export async function POST(req: Request) {
   try {
-    const student = await requireStudent();
+    const student = await requireStudentAuth(req);
     if (!student) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const parsed = parseBody(

@@ -3,24 +3,12 @@
 // Default: returns PENDING requests first, then others sorted by requestedAt desc
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 export async function GET(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth();
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const url = new URL(req.url);

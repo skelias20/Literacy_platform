@@ -4,21 +4,9 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseBody } from "@/lib/parseBody";
-
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
+import { requireAdminAuth } from "@/lib/serverAuth";
 
 const ReviewSchema = z.object({
   action:    z.enum(["approve", "reject"]),
@@ -31,7 +19,7 @@ export async function GET(
   ctx: { params: Promise<{ id: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth();
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await ctx.params;
@@ -85,7 +73,7 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { id } = await ctx.params;

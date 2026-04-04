@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { verifyAdminJwt, verifyStudentJwt } from "@/lib/auth";
+import { verifyStudentToken, verifyAdminToken } from "@/lib/serverAuth";
 import {
   generateFileId,
   generatePresignedPutUrl,
@@ -13,6 +13,7 @@ import {
 } from "@/lib/r2";
 import { rateLimit, getClientIp, RATE_LIMITS } from "@/lib/rateLimit";
 import { parseBody } from "@/lib/parseBody";
+import { validateOrigin } from "@/lib/csrf";
 
 export const runtime = "nodejs";
 
@@ -42,15 +43,19 @@ export async function POST(req: Request) {
   const diag: Record<string, unknown> = {};
 
   const deny = (status: number, error: string, extra?: Record<string, unknown>) => {
-    const payload = { error, diag: { ...diag, ...(extra ?? {}) } };
-    console.warn(`[upload/presign] deny ${status} ${error}`, payload.diag);
-    return NextResponse.json(payload, {
+    console.warn(`[upload/presign] deny ${status} ${error}`, { ...diag, ...(extra ?? {}) });
+    return NextResponse.json({ error }, {
       status,
       headers: { "cache-control": "no-store" },
     });
   };
 
   try {
+    // ── CSRF guard ────────────────────────────────────────────────────────
+    if (!validateOrigin(req)) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     // ── Rate limit ────────────────────────────────────────────────────────
     const ip = getClientIp(req);
     diag.ip = ip;
@@ -90,41 +95,41 @@ export async function POST(req: Request) {
     let uploaderId:    string | null = null;
     let uploaderType: "admin" | "student" | null = null;
 
-    const tryStudent = () => {
+    const tryStudent = async () => {
       if (!studentToken) return;
-      try {
-        const p = verifyStudentJwt(studentToken);
+      const p = await verifyStudentToken(studentToken);
+      if (p) {
         uploaderId   = p.childId;
         uploaderType = "student";
         diag.studentTokenValid = true;
-      } catch (e) {
-        diag.studentTokenError = e instanceof Error ? e.message : String(e);
+      } else {
+        diag.studentTokenError = "Invalid or revoked";
       }
     };
 
-    const tryAdmin = () => {
+    const tryAdmin = async () => {
       if (!adminToken) return;
-      try {
-        const p = verifyAdminJwt(adminToken);
+      const p = await verifyAdminToken(adminToken);
+      if (p) {
         uploaderId   = p.adminId;
         uploaderType = "admin";
         diag.adminTokenValid = true;
-      } catch (e) {
-        diag.adminTokenError = e instanceof Error ? e.message : String(e);
+      } else {
+        diag.adminTokenError = "Invalid or revoked";
       }
     };
 
     // Prefer the token that matches the context
     if (wantsStudent) {
-      tryStudent();
-      if (!uploaderId) tryAdmin();
+      await tryStudent();
+      if (!uploaderId) await tryAdmin();
     } else if (wantsAdmin) {
-      tryAdmin();
-      if (!uploaderId) tryStudent();
+      await tryAdmin();
+      if (!uploaderId) await tryStudent();
     } else {
       // receipt — unauthenticated, try both anyway for logging
-      tryStudent();
-      if (!uploaderId) tryAdmin();
+      await tryStudent();
+      if (!uploaderId) await tryAdmin();
     }
 
     diag.uploaderId   = uploaderId ? "SET" : null;

@@ -81,14 +81,28 @@ export function rateLimit(
 }
 
 /**
- * Extract the real client IP from Next.js request headers.
- * Falls back to "unknown" if not determinable.
+ * Extract the real client IP from request headers.
+ *
+ * Priority order (SEC-09):
+ *   1. x-vercel-forwarded-for — Vercel strips this from incoming client requests
+ *      before setting it from its edge. Cannot be spoofed on Vercel deployments.
+ *   2. cf-connecting-ip — Cloudflare strips this from incoming client requests
+ *      before setting its own value. Cannot be spoofed behind Cloudflare.
+ *   3. x-forwarded-for (first value) — Standard proxy header; spoofable by clients
+ *      not behind a header-stripping proxy. Retained as a fallback for deployments
+ *      behind other proxies. Not used in production on Vercel/Cloudflare.
+ *   4. "unknown" — Fallback when no header is determinable. All unknown-IP requests
+ *      share one rate-limit bucket, which is conservative and acceptable.
+ *
+ * Note: x-real-ip is intentionally omitted — it is equally spoofable as
+ * x-forwarded-for and offers no additional trust on the target deployment platforms.
  */
 export function getClientIp(req: Request): string {
   const headers = req.headers;
   return (
+    headers.get("x-vercel-forwarded-for") ??
+    headers.get("cf-connecting-ip") ??
     headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    headers.get("x-real-ip") ??
     "unknown"
   );
 }

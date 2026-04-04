@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcrypt";
 import { prisma } from "@/lib/prisma";
+import { requireAdminAuth } from "@/lib/serverAuth";
+import { sendCredentialsCreatedEmail } from "@/lib/email";
 
 export async function POST(
   req: Request,
   ctx: { params: Promise<{ id: string }> }
 ) {
+  const adminId = await requireAdminAuth(req);
+  if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   const { id } = await ctx.params;
   const body = await req.json();
 
@@ -19,7 +24,10 @@ export async function POST(
     );
   }
 
-  const child = await prisma.child.findUnique({ where: { id } });
+  const child = await prisma.child.findUnique({
+    where: { id },
+    include: { parent: { select: { email: true } } },
+  });
   if (!child) {
     return NextResponse.json({ error: "Child not found." }, { status: 404 });
   }
@@ -51,22 +59,25 @@ export async function POST(
       passwordHash,
       status: "assessment_required",
       credentialsCreatedAt: new Date(),
-      credentialsCreatedById: (
-        await prisma.admin.findFirst({ select: { id: true } })
-      )!.id,
+      credentialsCreatedById: adminId,
     },
   });
 
   await prisma.adminAuditLog.create({
     data: {
-      adminId: (
-        await prisma.admin.findFirst({ select: { id: true } })
-      )!.id,
+      adminId,
       action: "CREDENTIALS_CREATED",
       targetChildId: child.id,
       metadata: { username },
     },
   });
+
+  void sendCredentialsCreatedEmail(
+    child.parent?.email,
+    `${child.childFirstName} ${child.childLastName}`,
+    username,
+    password
+  ).catch(console.error);
 
   return NextResponse.json({ ok: true, child: updated });
 }

@@ -42,3 +42,6 @@ next-env.d.ts
 #Hook file
 /.claude/hooks/CHANGED_FILES.tmp
 /app/generated/prisma
+
+# Dictionary raw data files — do not commit, run import script instead
+/scripts/data/

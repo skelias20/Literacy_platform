@@ -7,20 +7,9 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import bcrypt from "bcrypt";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
+import { requireAdminAuth, invalidateStudentSessions } from "@/lib/serverAuth";
 import { parseBody } from "@/lib/parseBody";
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
 
 const ResetPasswordSchema = z.object({
   // Admin can supply a custom password or omit to use a generated one.
@@ -49,7 +38,7 @@ export async function POST(
   ctx: { params: Promise<{ childId: string }> }
 ) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const { childId } = await ctx.params;
@@ -92,6 +81,10 @@ export async function POST(
       where: { id: childId },
       data: { passwordHash },
     });
+
+    // SEC-04: Invalidate any active student sessions so the old password's token
+    // cannot be reused after the reset. Student must log in with the new credentials.
+    await invalidateStudentSessions(childId);
 
     // Return plain password once — admin communicates to parent via SMS.
     // This is the only time the plain password is ever visible.

@@ -2,10 +2,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { prisma } from "@/lib/prisma";
-import { cookies } from "next/headers";
-import { verifyAdminJwt } from "@/lib/auth";
 import { parseBody } from "@/lib/parseBody";
 import { LiteracyLevelSchema, IdSchema } from "@/lib/schemas";
+import { requireAdminAuth } from "@/lib/serverAuth";
+import { sendLevelAssignedEmail } from "@/lib/email";
 
 export const runtime = "nodejs";
 
@@ -14,20 +14,9 @@ const AssignLevelSchema = z.object({
   level: LiteracyLevelSchema,
 });
 
-async function requireAdmin(): Promise<string | null> {
-  const cookieStore = await cookies();
-  const token = cookieStore.get("admin_token")?.value;
-  if (!token) return null;
-  try {
-    return verifyAdminJwt(token).adminId;
-  } catch {
-    return null;
-  }
-}
-
 export async function POST(req: Request) {
   try {
-    const adminId = await requireAdmin();
+    const adminId = await requireAdminAuth(req);
     if (!adminId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
     const parsed = parseBody(
@@ -47,6 +36,13 @@ export async function POST(req: Request) {
         submittedAt: true,
         assignedLevel: true,
         sessionNumber: true,
+        child: {
+          select: {
+            childFirstName: true,
+            archivedAt: true,
+            parent: { select: { email: true } },
+          },
+        },
       },
     });
 
@@ -97,6 +93,16 @@ export async function POST(req: Request) {
         },
       });
     });
+
+    // Fire notification — fire-and-forget, never blocks the route response.
+    // Only send for initial assessments (level assigned for the first time → student goes active).
+    // For periodic (level updated), the student is already active — email is still informative.
+    void sendLevelAssignedEmail(
+      assessment.child.parent.email,
+      assessment.child.childFirstName,
+      level,
+      assessment.child.archivedAt
+    ).catch(console.error);
 
     return NextResponse.json({ ok: true });
   } catch (e: unknown) {

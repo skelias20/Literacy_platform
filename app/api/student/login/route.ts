@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     }
 
     // ── Parse + validate input ────────────────────────────────────────────
-    const parsed = parseBody(StudentLoginSchema, await req.json(), "student/login");
+    const parsed = parseBody(StudentLoginSchema, await req.json().catch(() => null), "student/login");
     if (!parsed.ok) return parsed.response;
     const { username, password } = parsed.data;
 
@@ -37,13 +37,11 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
     }
 
-    const ok = await bcrypt.compare(password, child.passwordHash);
-    if (!ok) {
-      return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
-    }
-
-    // ── Account state checks ──────────────────────────────────────────────
-    // Check archived first — gives a clear message rather than generic 403
+    // ── Account state checks (before bcrypt) ─────────────────────────────
+    // Checked here — before the bcrypt comparison — so that a 403 response
+    // cannot be used to confirm that a username+password pair is valid.
+    // Previously these ran after bcrypt, leaking credential validity on
+    // archived accounts (SEC-11).
     if (child.archivedAt) {
       return NextResponse.json(
         { error: "This account has been deactivated. Please contact the administrator." },
@@ -62,15 +60,30 @@ export async function POST(req: Request) {
       );
     }
 
-    const token = signStudentJwt({ childId: child.id, username });
+    // ── Password check ────────────────────────────────────────────────────
+    const ok = await bcrypt.compare(password, child.passwordHash);
+    if (!ok) {
+      return NextResponse.json({ error: "Invalid credentials." }, { status: 401 });
+    }
+
+    const token = signStudentJwt({ childId: child.id, username, tokenVersion: child.tokenVersion });
 
     const res = NextResponse.json({ ok: true });
+    // SEC-03 (Option A): maxAge aligned to JWT expiresIn ("1d") so the cookie
+    // is never live after the token it carries has expired. This eliminates the
+    // 6-day stale-cookie window that was causing 401 redirect loops post-expiry.
+    //
+    // TODO SEC-03 (Option B — when Redis is available): replace with short-lived
+    // access tokens (15 min JWT) + a long-lived httpOnly refresh token stored in
+    // the DB/Redis with server-side revocation. This also unblocks SEC-04
+    // (session invalidation on archive/password-reset) and SEC-07 (Redis-backed
+    // rate limiter). Upstash Redis is the recommended provider for Vercel deploys.
     res.cookies.set("student_token", token, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
       path: "/",
-      maxAge: 60 * 60 * 24 * 7,
+      maxAge: 60 * 60 * 24, // 1 day — matches JWT expiresIn: "1d"
     });
 
     return res;

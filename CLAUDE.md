@@ -204,6 +204,9 @@ Detailed documentation is in `.claude/`:
 | `.claude/dev_checklist.md` | Completed work, pending tasks, priorities, production TODOs |
 | `.claude/billing-subscription.md` | Full billing & subscription design — schema, routes, UI, access control, premium tier notes |
 | `.claude/payment-plans.md` | Future payment plans, subscription tiers (Standard/Premium), gateway integration (Stripe/PayMongo), multi-plan architecture, implementation sequence |
+| `.claude/notifications.md` | Email notification system — provider choice (Resend), events, schema change, lib/email.ts structure |
+| `.claude/dictionary.md` | Local dictionary system — WordNet + CMUdict, schema, import script, API route, UI integration |
+| `.claude/analytics.md` | Analytics dashboard — all 6 panels, queries, API response shape, chart library, future panels |
 
 ## 13. Tooling Efficiency Rules
 
